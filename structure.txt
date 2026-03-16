@@ -1,0 +1,19 @@
+posttrack/
+├── config/
+│   ├── __init__.py
+│   ├── settings.py
+│   ├── urls.py
+│   ├── asgi.py
+│   └── wsgi.py
+├── accounts/         → User модель, JWT, ролі, HR реєстрація
+├── locations/        → Location, LocationType
+├── shipments/        → Shipment, Payment, відправник/отримувач
+├── tracking/         → TrackingEvent, публічний трекінг
+├── dispatch/         → DispatchGroup, DispatchGroupItem
+├── logistics/        → Route, RouteStep, автомаршрути
+├── chat/             → ChatRoom, Message (WebSocket)
+├── reports/          → PDF генерація (ReportLab)
+├── core/             → seed_data команда
+├── requirements.txt
+├── manage.py
+└── .env.example

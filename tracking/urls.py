@@ -1,7 +1,7 @@
-from rest_framework.routers import DefaultRouter
-from .views import TrackingEventViewSet
+from django.urls import path
+from .views import PublicTrackingView, ShipmentEventsView
 
-router = DefaultRouter()
-router.register(r"", TrackingEventViewSet, basename="tracking")
-
-urlpatterns = router.urls
+urlpatterns = [
+    path('public/<str:tracking_number>/', PublicTrackingView.as_view()),
+    path('events/', ShipmentEventsView.as_view()),
+]

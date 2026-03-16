@@ -11,8 +11,8 @@ def create_initial_tracking(sender, instance: Shipment, created: bool, **kwargs)
         return
 
     with transaction.atomic():
-        # якщо вже не CREATED — просто зафіксуємо як є
-        if instance.status != ShipmentStatus.CREATED:
+        
+        if instance.status != ShipmentStatus.ACCEPTED:
             TrackingEvent.objects.create(
                 shipment=instance,
                 status=instance.status,
@@ -21,8 +21,8 @@ def create_initial_tracking(sender, instance: Shipment, created: bool, **kwargs)
             )
             return
 
-        # ставимо AT_POST_OFFICE як перший логічний статус
-        Shipment.objects.filter(pk=instance.pk).update(status=ShipmentStatus.AT_POST_OFFICE)
+        
+        Shipment.objects.filter(pk=instance.pk).update(status=ShipmentStatus.ACCEPTED)
 
         TrackingEvent.objects.create(
             shipment=instance,

@@ -1,31 +1,56 @@
 from rest_framework.permissions import BasePermission
+from .models import Role
 
 
-class HasRole(BasePermission):
-    allowed_roles: set[str] = set()
-
+class IsAdmin(BasePermission):
     def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-        return getattr(user, "role", "customer") in self.allowed_roles
+        return request.user.is_authenticated and request.user.role == Role.ADMIN
 
 
-class IsWorker(BasePermission):
+class IsHR(BasePermission):
     def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-        return getattr(user, "role", "customer") != "customer"
+        return request.user.is_authenticated and request.user.role in (Role.HR, Role.ADMIN)
 
 
-class IsPostWorkerOrAdmin(HasRole):
-    allowed_roles = {"post_worker", "admin"}
+class IsPostalWorker(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (Role.POSTAL_WORKER, Role.ADMIN)
 
 
-class IsWarehouseWorkerOrAdmin(HasRole):
-    allowed_roles = {"warehouse_worker", "admin"}
+class IsSortingCenterWorker(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (Role.SORTING_CENTER_WORKER, Role.ADMIN)
+    
+class IsDisrributionCenterWorker(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (Role.DISTRIBUTION_CENTER_WORKER, Role.ADMIN)
 
 
-class IsLogisticianOrAdmin(HasRole):
-    allowed_roles = {"logistician", "admin"}
+class IsDriver(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (Role.DRIVER, Role.ADMIN)
+
+
+class IsLogist(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (Role.LOGIST, Role.ADMIN)
+
+
+class IsPostalOrWarehouse(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (
+            Role.POSTAL_WORKER, Role.WAREHOUSE_WORKER, Role.ADMIN
+        )
+
+
+class IsDriverOrLogist(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (
+            Role.DRIVER, Role.LOGIST, Role.ADMIN
+        )
+
+
+class IsStaff(BasePermission):
+    """Будь-який працівник (не клієнт)."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role != Role.CUSTOMER

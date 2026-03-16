@@ -1,11 +1,8 @@
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import TruckViewSet, RoutePlanViewSet, RouteStopViewSet, TripViewSet, TripDispatchGroupViewSet
+from .views import RouteViewSet
 
 router = DefaultRouter()
-router.register(r"trucks", TruckViewSet, basename="trucks")
-router.register(r"route-plans", RoutePlanViewSet, basename="route-plans")
-router.register(r"route-stops", RouteStopViewSet, basename="route-stops")
-router.register(r"trips", TripViewSet, basename="trips")
-router.register(r"trip-groups", TripDispatchGroupViewSet, basename="trip-groups")
+router.register('routes', RouteViewSet, basename='route')
 
-urlpatterns = router.urls
+urlpatterns = [path('', include(router.urls))]

@@ -1,37 +1,63 @@
-from typing import List
-from django.core.exceptions import ValidationError
+from .models import Route, RouteStep
 from locations.models import Location, LocationType
 
 
-def build_route(origin_po: Location, destination_po: Location) -> List[Location]:
-    """
-    Реалістичний базовий маршрут:
-    PO(origin) -> SC(origin) -> DC(origin) -> (DC(dest) якщо інша область) -> SC(dest) -> PO(dest)
+class RouteService:
 
-    Оптимізація:
-    - якщо origin_sc == dest_sc: PO -> SC -> PO
-    - якщо origin_dc == dest_dc, але різні SC: PO -> SC -> DC -> SC -> PO
-    """
-    if origin_po.type != LocationType.POST_OFFICE or destination_po.type != LocationType.POST_OFFICE:
-        raise ValidationError("Origin and destination must be Post Offices.")
+    @staticmethod
+    def generate_route(shipment) -> Route:
+        """
+        Автоматична генерація маршруту:
+          origin_post → sorting_center → distribution_center → sorting_center → destination_post
+        """
+        origin = shipment.origin_location
+        dest   = shipment.destination_location
 
-    origin_sc = origin_po.parent_sc
-    dest_sc = destination_po.parent_sc
-    if not origin_sc or not dest_sc:
-        raise ValidationError("Post office must have parent_sc.")
+        sc_origin = (
+            Location.objects.filter(type=LocationType.SORTING_CENTER, is_active=True).first()
+        )
+        dc = (
+            Location.objects.filter(type=LocationType.DISTRIBUTION_CENTER, is_active=True).first()
+        )
+        sc_dest = (
+            Location.objects.filter(type=LocationType.SORTING_CENTER, is_active=True).last()
+        )
 
-    origin_dc = origin_sc.parent_dc
-    dest_dc = dest_sc.parent_dc
-    if not origin_dc or not dest_dc:
-        raise ValidationError("Sorting city must have parent_dc.")
+        route = Route.objects.create(shipment=shipment, is_custom=False)
 
-    # 1) Той самий район
-    if origin_sc.id == dest_sc.id:
-        return [origin_po, origin_sc, destination_po]
+        # Будуємо унікальний список кроків
+        steps = [origin]
+        if sc_origin and sc_origin != origin:
+            steps.append(sc_origin)
+        if dc and dc not in steps:
+            steps.append(dc)
+        if sc_dest and sc_dest not in steps and sc_dest != dest:
+            steps.append(sc_dest)
+        if dest not in steps:
+            steps.append(dest)
 
-    # 2) Та сама область, але різні райони
-    if origin_dc.id == dest_dc.id:
-        return [origin_po, origin_sc, origin_dc, dest_sc, destination_po]
+        for i, location in enumerate(steps, start=1):
+            RouteStep.objects.create(route=route, order=i, location=location)
 
-    # 3) Різні області
-    return [origin_po, origin_sc, origin_dc, dest_dc, dest_sc, destination_po]
+        return route
+
+    @staticmethod
+    def update_route(route: Route, location_ids: list, updated_by) -> Route:
+        """Логіст змінює маршрут вручну."""
+        route.steps.all().delete()
+        route.is_custom = True
+        route.save()
+
+        for i, loc_id in enumerate(location_ids, start=1):
+            RouteStep.objects.create(route=route, order=i, location_id=loc_id)
+
+        from tracking.services import TrackingService
+        TrackingService.add_event(
+            shipment=route.shipment,
+            event_type="in_transit",
+            location=route.shipment.current_location,
+            performed_by=updated_by,
+            note="Маршрут змінено логістом.",
+            is_public=False,
+        )
+        return route

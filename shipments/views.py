@@ -1,152 +1,169 @@
-import re
-
-from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied, ValidationError, NotFound
-from rest_framework import status
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.views import APIView
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
 
-from accounts.permissions import IsPostWorkerOrAdmin, IsWorker
-from accounts.models import UserRole
-
-from locations.models import LocationType
-from tracking.models import TrackingEvent
-
-from .models import Shipment
+from .models import Shipment, Payment, ShipmentStatus, PaymentType
 from .serializers import (
-    ShipmentSerializer,
-    ShipmentPublicBriefSerializer,
-    ShipmentPublicTrackingSerializer,
+    ShipmentListSerializer, ShipmentCreateSerializer,
+    ShipmentDetailSerializer, ShipmentStatusUpdateSerializer,
 )
-from shipments.models import ShipmentStatus
-from shipments.services import ShipmentService
-from django.core.exceptions import ValidationError as DjangoValidationError
-
-
-
-def _digits(s: str) -> str:
-    return re.sub(r"\D+", "", s or "")
-
-
-def _phone_matches(shipment: Shipment, phone: str | None, phone_last4: str | None) -> bool:
-    sender = _digits(getattr(shipment, "sender_phone", ""))
-    recip = _digits(getattr(shipment, "recipient_phone", ""))
-
-    if not sender and not recip:
-        return False
-
-    if phone:
-        p = _digits(phone)
-        return bool(p) and (p == sender or p == recip)
-
-    if phone_last4:
-        last4 = _digits(phone_last4)[-4:]
-        if len(last4) != 4:
-            return False
-        return sender.endswith(last4) or recip.endswith(last4)
-
-    return False
+from accounts.permissions import IsPostalWorker, IsPostalOrWarehouse, IsStaff
+from tracking.utils import create_tracking_event
 
 
 class ShipmentViewSet(ModelViewSet):
-    queryset = Shipment.objects.select_related("origin", "destination").all()
-    serializer_class = ShipmentSerializer
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_permissions(self):
-        if self.action == "create":
-            return [IsAuthenticated(), IsPostWorkerOrAdmin()]
-        if self.action in ("update", "partial_update", "destroy"):
-            return [IsAuthenticated(), IsWorker()]
-        if self.action == "track":
-            return [AllowAny()]
-        return [IsAuthenticated()]
+        if self.action == 'create':
+            return [IsPostalWorker()]
+        return [IsStaff()]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ShipmentCreateSerializer
+        if self.action in ('list',):
+            return ShipmentListSerializer
+        return ShipmentDetailSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
         user = self.request.user
+        from accounts.models import Role
+        qs = Shipment.objects.select_related('origin', 'destination', 'created_by', 'payment')
 
-        # Anonymous для track не має лізти в фільтрацію
-        if getattr(user, "is_anonymous", False):
-            return qs
+        if user.role == Role.POSTAL_WORKER:
+            # бачить тільки посилки свого відділення
+            qs = qs.filter(origin=user.location) | qs.filter(destination=user.location)
+        elif user.role in (Role.SORTING_CENTER_WORKER, Role.DISTRIBUTION_CENTER_WORKER):
+            # посилки на своєму складі (через dispatch)
+            from dispatch.models import DispatchGroupItem
+            shipment_ids = DispatchGroupItem.objects.filter(
+                group__current_location=user.location
+            ).values_list('shipment_id', flat=True)
+            qs = qs.filter(id__in=shipment_ids)
+        elif user.role == Role.CUSTOMER:
+            # клієнт не має доступу через цей endpoint
+            qs = qs.none()
+        # logist, admin — всі посилки
 
-        if getattr(user, "role", "customer") == "customer":
-            return qs.filter(created_by=user)
-        return qs
+        # фільтри
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(tracking_number__icontains=search)
+
+        return qs.distinct()
 
     def perform_create(self, serializer):
         user = self.request.user
-        user_loc = getattr(user, "assigned_location", None)
-    
-        if not user_loc or getattr(user_loc, "type", None) != LocationType.POST_OFFICE:
-            raise ValidationError("User must be assigned to a Post Office to create shipment.")
-    
-        # ігноруємо origin з фронту (навіть якщо прийшов) — щоб не було махінацій
-        shipment = serializer.save(created_by=user, origin=user_loc)
-    
-        # одразу ставимо статус "AT_POST_OFFICE" + TrackingEvent
-        try:
-            ShipmentService.set_status(
-                shipment,
-                ShipmentStatus.AT_POST_OFFICE,
-                location=user_loc,
-                actor_user=user,
-                comment="Accepted at post office.",
+        shipment = serializer.save(
+            origin=user.location,
+            created_by=user,
+        )
+        # Створюємо запис оплати
+        Payment.objects.create(
+            shipment=shipment,
+            amount=shipment.price,
+            is_paid=(shipment.payment_type == PaymentType.PREPAID),
+        )
+        # Трекінг-подія
+        create_tracking_event(
+            shipment=shipment,
+            event_type='accepted',
+            location=user.location,
+            created_by=user,
+            note='Посилку прийнято та зареєстровано у системі.',
+            is_public=True,
+        )
+
+    @action(detail=True, methods=['post'], permission_classes=[IsPostalOrWarehouse])
+    def update_status(self, request, pk=None):
+        """POST /api/shipments/<id>/update_status/"""
+        shipment = self.get_object()
+        serializer = ShipmentStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        new_status = serializer.validated_data['status']
+        note = serializer.validated_data.get('note', '')
+
+        shipment.status = new_status
+        shipment.save()
+
+        create_tracking_event(
+            shipment=shipment,
+            event_type=new_status,
+            location=request.user.location,
+            created_by=request.user,
+            note=note,
+            is_public=True,
+        )
+        return Response(ShipmentDetailSerializer(shipment).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsPostalOrWarehouse])
+    def cancel(self, request, pk=None):
+        """POST /api/shipments/<id>/cancel/"""
+        shipment = self.get_object()
+        if shipment.status in (ShipmentStatus.DELIVERED, ShipmentStatus.CANCELLED, ShipmentStatus.RETURNED):
+            return Response(
+                {'detail': 'Неможливо скасувати посилку в поточному статусі.'},
+                status=status.HTTP_400_BAD_REQUEST
             )
-        except DjangoValidationError as e:
-            raise ValidationError(str(e))
+        shipment.status = ShipmentStatus.CANCELLED
+        shipment.save()
+        create_tracking_event(
+            shipment=shipment,
+            event_type='cancelled',
+            location=request.user.location,
+            created_by=request.user,
+            note=request.data.get('reason', 'Посилку скасовано.'),
+            is_public=True,
+        )
+        return Response({'detail': 'Посилку скасовано.'})
 
-    @action(detail=False, methods=["get"], url_path=r"track/(?P<tracking_code>[^/.]+)")
-    def track(self, request, tracking_code=None):
-        try:
-            shipment = Shipment.objects.select_related("origin", "destination").get(tracking_code=tracking_code)
-        except Shipment.DoesNotExist:
-            raise NotFound("Shipment not found.")
-
-        phone = request.query_params.get("phone")
-        phone_last4 = request.query_params.get("phone_last4")
-
-        # Без телефону — короткий (публічний) перегляд
-        if not phone and not phone_last4:
-            return Response(ShipmentPublicBriefSerializer(shipment).data)
-
-        # З телефоном — повний або 403
-        if _phone_matches(shipment, phone, phone_last4):
-            return Response(ShipmentPublicTrackingSerializer(shipment).data)
-
-        return Response({"detail": "Phone verification failed."}, status=status.HTTP_403_FORBIDDEN)
-
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated], url_path="deliver")
-    def deliver(self, request, pk=None):
-        sh = self.get_object()
-        u = request.user
-
-        if getattr(u, "role", None) not in (UserRole.POSTAL_WORKER, UserRole.ADMIN):
-            raise PermissionDenied("Only postal worker/admin can deliver shipments.")
-
-        if not getattr(u, "assigned_location", None):
-            raise ValidationError("User has no assigned_location.")
-
-        if u.assigned_location.type != LocationType.POST_OFFICE:
-            raise ValidationError("Delivery is allowed only at Post Office.")
-
-        if u.role != UserRole.ADMIN and sh.destination_id != u.assigned_location_id:
-            raise PermissionDenied("You can deliver only at destination post office.")
-
-        if sh.status != ShipmentStatus.READY_FOR_PICKUP:
-            raise ValidationError("Shipment must be READY_FOR_PICKUP to deliver.")
-
-        comment = request.data.get("comment", "Delivered to recipient.")
-
-        try:
-            ShipmentService.set_status(
-                sh,
-                ShipmentStatus.DELIVERED,
-                location=u.assigned_location,
-                actor_user=u,
-                comment=comment,
+    @action(detail=True, methods=['post'], permission_classes=[IsPostalWorker])
+    def confirm_delivery(self, request, pk=None):
+        """POST /api/shipments/<id>/confirm_delivery/ — підтвердження доставки."""
+        shipment = self.get_object()
+        if shipment.status == ShipmentStatus.DELIVERED:
+            return Response({'detail': 'Вже доставлено.'}, status=status.HTTP_400_BAD_REQUEST)
+        shipment.status = ShipmentStatus.DELIVERED
+        shipment.save()
+        # Якщо cash_on_delivery — підтверджуємо оплату
+        if shipment.payment_type == PaymentType.CASH_ON_DELIVERY:
+            payment, _ = Payment.objects.get_or_create(
+                shipment=shipment, defaults={'amount': shipment.price}
             )
-        except DjangoValidationError as e:
-            raise ValidationError(str(e))
+            payment.is_paid = True
+            payment.paid_at = timezone.now()
+            payment.received_by = request.user
+            payment.save()
+        create_tracking_event(
+            shipment=shipment,
+            event_type='delivered',
+            location=request.user.location,
+            created_by=request.user,
+            note='Посилку доставлено отримувачу.',
+            is_public=True,
+        )
+        return Response(ShipmentDetailSerializer(shipment).data)
 
-        return Response({"tracking_code": sh.tracking_code, "status": sh.status})
+    @action(detail=True, methods=['post'], permission_classes=[IsPostalWorker])
+    def confirm_payment(self, request, pk=None):
+        """POST /api/shipments/<id>/confirm_payment/ — ручне підтвердження оплати."""
+        shipment = self.get_object()
+        payment, _ = Payment.objects.get_or_create(
+            shipment=shipment, defaults={'amount': shipment.price}
+        )
+        if payment.is_paid:
+            return Response({'detail': 'Вже оплачено.'}, status=status.HTTP_400_BAD_REQUEST)
+        payment.is_paid = True
+        payment.paid_at = timezone.now()
+        payment.received_by = request.user
+        payment.save()
+        return Response({'detail': 'Оплату підтверджено.'})

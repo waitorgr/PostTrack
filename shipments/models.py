@@ -1,110 +1,119 @@
-from decimal import Decimal
-from django.conf import settings
 from django.db import models
-from core.models import TimeStampedModel
-from core.utils import generate_tracking_code
-from locations.models import Location, LocationType
+from django.utils import timezone
+import random
+import string
 
 
-
-class ParcelSize(models.TextChoices):
-    LETTER = "letter", "Letter"
-    BIG_LETTER = "big_letter", "Big letter"
-    S = "s", "S"
-    M = "m", "M"
-    L = "l", "L"
-    XL = "xl", "XL"
-    XXL = "xxl", "XXL"
-
-
-SIZE_BASE = {
-    ParcelSize.LETTER: {"weight_kg": Decimal("0.2"), "price": Decimal("35.00")},
-    ParcelSize.BIG_LETTER: {"weight_kg": Decimal("0.5"), "price": Decimal("55.00")},
-    ParcelSize.S: {"weight_kg": Decimal("1.0"), "price": Decimal("75.00")},
-    ParcelSize.M: {"weight_kg": Decimal("3.0"), "price": Decimal("105.00")},
-    ParcelSize.L: {"weight_kg": Decimal("5.0"), "price": Decimal("135.00")},
-    ParcelSize.XL: {"weight_kg": Decimal("10.0"), "price": Decimal("175.00")},
-    ParcelSize.XXL: {"weight_kg": Decimal("20.0"), "price": Decimal("240.00")},
-}
+def generate_tracking_number():
+    digits = ''.join(random.choices(string.digits, k=9))
+    return f"UA{digits}UA"
 
 
 class ShipmentStatus(models.TextChoices):
-    CREATED = "created", "Created"
-
-    AT_POST_OFFICE = "at_post_office", "At post office"
-    IN_TRANSIT_TO_SORTING_CITY = "in_transit_to_sorting_city", "In transit to sorting city"
-    AT_SORTING_CITY = "at_sorting_city", "At sorting city"
-    SORTED_WAITING_FOR_DISPATCH = "sorted_waiting_for_dispatch", "Sorted, waiting for dispatch"
-
-    IN_TRANSIT_TO_DISTRIBUTION_CENTER = "in_transit_to_distribution_center", "In transit to distribution center"
-    AT_DISTRIBUTION_CENTER = "at_distribution_center", "At distribution center"
-
-    SORTED_WAITING_FOR_POST_OFFICE = "sorted_waiting_for_post_office", "Sorted, waiting for post office"
-    IN_TRANSIT_TO_POST_OFFICE = "in_transit_to_post_office", "In transit to post office"
-
-    READY_FOR_PICKUP = "ready_for_pickup", "Ready for pickup"
-    DELIVERED = "delivered", "Delivered"
-    CANCELLED = "cancelled", "Cancelled"
+    ACCEPTED = 'accepted', 'Прийнято'
+    PICKED_UP_BY_DRIVER = 'picked_up_by_driver', 'Забрано водієм'
+    IN_TRANSIT = 'in_transit', 'В дорозі'
+    ARRIVED_AT_FACILITY = 'arrived_at_facility', 'Прибуло до об\'єкту'
+    SORTED = 'sorted', 'Відсортовано'
+    OUT_FOR_DELIVERY = 'out_for_delivery', 'Передано для доставки'
+    AVAILABLE_FOR_PICKUP = 'available_for_pickup', 'Очікує отримання'
+    DELIVERED = 'delivered', 'Доставлено'
+    CANCELLED = 'cancelled', 'Скасовано'
+    RETURNED = 'returned', 'Повернуто'
 
 
+class PaymentType(models.TextChoices):
+    PREPAID = 'prepaid', 'Передоплата'
+    CASH_ON_DELIVERY = 'cash_on_delivery', 'Оплата при отриманні'
 
 
-class Shipment(TimeStampedModel):
-    tracking_code = models.CharField(max_length=32, unique=True, editable=False)
-
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="created_shipments",
+class Shipment(models.Model):
+    tracking_number = models.CharField(
+        'Трекінг-номер', max_length=20, unique=True, default=generate_tracking_number
     )
+    # Відправник (фізична особа, не User)
+    sender_first_name = models.CharField('Ім\'я відправника', max_length=100)
+    sender_last_name = models.CharField('Прізвище відправника', max_length=100)
+    sender_patronymic = models.CharField('По-батькові відправника', max_length=100)
+    sender_phone = models.CharField('Телефон відправника', max_length=20)
+    sender_email = models.EmailField('Email відправника', blank=True)
 
-    # Дані відправника/отримувача (можна буде винести в окремі сутності пізніше)
-    sender_name = models.CharField(max_length=120)
-    sender_phone = models.CharField(max_length=32)
-    recipient_name = models.CharField(max_length=120)
-    recipient_phone = models.CharField(max_length=32)
+    # Отримувач
+    receiver_first_name = models.CharField('Ім\'я отримувача', max_length=100)
+    receiver_last_name = models.CharField('Прізвище отримувача', max_length=100)
+    receiver_patronymic = models.CharField('По-батькові отримувача', max_length=100)
+    receiver_phone = models.CharField('Телефон отримувача', max_length=20)
+    receiver_email = models.EmailField('Email отримувача', blank=True)
 
+    # Локації
     origin = models.ForeignKey(
-    Location,
-    on_delete=models.PROTECT,
-    related_name="origin_shipments",
-    limit_choices_to={"type": LocationType.POST_OFFICE},
+        'locations.Location', on_delete=models.PROTECT,
+        related_name='sent_shipments', verbose_name='Відділення відправлення'
     )
     destination = models.ForeignKey(
-        Location,
-        on_delete=models.PROTECT,
-        related_name="destination_shipments",
-        limit_choices_to={"type": LocationType.POST_OFFICE},
+        'locations.Location', on_delete=models.PROTECT,
+        related_name='received_shipments', verbose_name='Відділення призначення'
     )
 
+    # Параметри
+    weight = models.DecimalField('Вага (кг)', max_digits=7, decimal_places=2)
+    description = models.TextField('Опис', blank=True)
+    price = models.DecimalField('Ціна доставки', max_digits=10, decimal_places=2)
+    payment_type = models.CharField(
+        'Тип оплати', max_length=20, choices=PaymentType.choices, default=PaymentType.PREPAID
+    )
 
-    size = models.CharField(max_length=16, choices=ParcelSize.choices)
-    weight_kg = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
-    price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    # Статус
+    status = models.CharField(
+        'Статус', max_length=30, choices=ShipmentStatus.choices, default=ShipmentStatus.ACCEPTED
+    )
 
-    status = models.CharField(max_length=64, choices=ShipmentStatus.choices, default=ShipmentStatus.CREATED)
+    # Хто зареєстрував
+    created_by = models.ForeignKey(
+        'accounts.User', on_delete=models.SET_NULL,
+        null=True, related_name='created_shipments', verbose_name='Зареєстрував'
+    )
+    created_at = models.DateTimeField('Створено', default=timezone.now)
+    updated_at = models.DateTimeField('Оновлено', auto_now=True)
 
-    description = models.CharField(max_length=255, blank=True)
-
-    def apply_size_defaults(self):
-        base = SIZE_BASE.get(self.size)
-        if base:
-            self.weight_kg = base["weight_kg"]
-            self.price = base["price"]
-
-    def save(self, *args, **kwargs):
-        if not self.tracking_code:
-            # генеруємо унікальний код
-            code = generate_tracking_code()
-            while Shipment.objects.filter(tracking_code=code).exists():
-                code = generate_tracking_code()
-            self.tracking_code = code
-
-        if self.size and (self.weight_kg == Decimal("0.00") or self.price == Decimal("0.00")):
-            self.apply_size_defaults()
-
-        super().save(*args, **kwargs)
-
+    class Meta:
+        verbose_name = 'Посилка'
+        verbose_name_plural = 'Посилки'
+        ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.tracking_code} ({self.status})"
+        return f"{self.tracking_number} ({self.get_status_display()})"
+
+    @property
+    def sender_full_name(self):
+        return f"{self.sender_last_name} {self.sender_first_name} {self.sender_patronymic}".strip()
+
+    @property
+    def receiver_full_name(self):
+        return f"{self.receiver_last_name} {self.receiver_first_name} {self.receiver_patronymic}".strip()
+
+    @staticmethod
+    def calculate_price(weight_kg):
+        """30 грн базово + 15 грн/кг."""
+        return round(30 + 15 * float(weight_kg), 2)
+
+
+class Payment(models.Model):
+    shipment = models.OneToOneField(
+        Shipment, on_delete=models.CASCADE, related_name='payment'
+    )
+    amount = models.DecimalField('Сума', max_digits=10, decimal_places=2)
+    is_paid = models.BooleanField('Оплачено', default=False)
+    paid_at = models.DateTimeField('Час оплати', null=True, blank=True)
+    received_by = models.ForeignKey(
+        'accounts.User', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='received_payments'
+    )
+
+    class Meta:
+        verbose_name = 'Оплата'
+        verbose_name_plural = 'Оплати'
+
+    def __str__(self):
+        status = 'оплачено' if self.is_paid else 'не оплачено'
+        return f"Оплата {self.shipment.tracking_number} — {status}"
