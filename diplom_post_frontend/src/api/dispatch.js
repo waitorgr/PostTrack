@@ -1,11 +1,25 @@
-import api from './axios'
-export const apiGetGroups      = (params) => api.get('/dispatch/groups/', { params }).then(r => r.data)
-export const apiGetGroup       = (id)     => api.get(`/dispatch/groups/${id}/`).then(r => r.data)
-export const apiCreateGroup    = (data)   => api.post('/dispatch/groups/', data).then(r => r.data)
-export const apiAddShipment    = (id, tracking_number) =>
-  api.post(`/dispatch/groups/${id}/add_shipment/`, { tracking_number }).then(r => r.data)
-export const apiRemoveShipment = (id, tracking_number) =>
-  api.post(`/dispatch/groups/${id}/remove_shipment/`, { tracking_number }).then(r => r.data)
-export const apiMarkReady      = (id)     => api.post(`/dispatch/groups/${id}/mark_ready/`).then(r => r.data)
-export const apiDepart         = (id)     => api.post(`/dispatch/groups/${id}/depart/`).then(r => r.data)
-export const apiArrive         = (id)     => api.post(`/dispatch/groups/${id}/arrive/`).then(r => r.data)
+import client from './client'
+
+export const apiGetDispatchGroups = (params) =>
+  client.get('/dispatch/groups/', { params }).then((res) => res.data)
+
+export const apiGetDispatchGroup = (id) =>
+  client.get(`/dispatch/groups/${id}/`).then((res) => res.data)
+
+export const apiCreateDispatchGroup = (data) =>
+  client.post('/dispatch/groups/', data).then((res) => res.data)
+
+export const apiAddShipmentToDispatch = (id, tracking_number) =>
+  client.post(`/dispatch/groups/${id}/add_shipment/`, { tracking_number }).then((res) => res.data)
+
+export const apiRemoveShipmentFromDispatch = (id, tracking_number) =>
+  client.post(`/dispatch/groups/${id}/remove_shipment/`, { tracking_number }).then((res) => res.data)
+
+export const apiMarkDispatchReady = (id) =>
+  client.post(`/dispatch/groups/${id}/mark_ready/`).then((res) => res.data)
+
+export const apiDepartDispatch = (id) =>
+  client.post(`/dispatch/groups/${id}/depart/`).then((res) => res.data)
+
+export const apiArriveDispatch = (id) =>
+  client.post(`/dispatch/groups/${id}/arrive/`).then((res) => res.data)

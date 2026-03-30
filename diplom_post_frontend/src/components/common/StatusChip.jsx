@@ -1,13 +1,29 @@
-import { Chip } from '@mui/material'
-import { STATUS_LABELS, STATUS_COLORS } from '../../utils/formatters'
+import Chip from '@mui/material/Chip'
+import {
+  SHIPMENT_STATUS_LABELS,
+  SHIPMENT_STATUS_COLORS,
+} from '../../utils/statusConfig'
 
-export default function StatusChip({ status, size = 'small' }) {
+const COLOR_MAP = {
+  default: 'default',
+  info: 'info',
+  warning: 'warning',
+  success: 'success',
+  error: 'error',
+}
+
+export default function StatusChip({
+  status,
+  labels = SHIPMENT_STATUS_LABELS,
+  colors = SHIPMENT_STATUS_COLORS,
+  size = 'small',
+}) {
   return (
     <Chip
-      label={STATUS_LABELS[status] || status}
-      color={STATUS_COLORS[status] || 'default'}
+      label={labels[status] || status || '—'}
+      color={COLOR_MAP[colors[status]] || 'default'}
       size={size}
-      sx={{ fontWeight: 600, borderRadius: '6px' }}
+      variant="filled"
     />
   )
 }

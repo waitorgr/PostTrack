@@ -1,2 +1,4 @@
-import api from './axios'
-export const apiGetLocations = (params) => api.get('/locations/', { params }).then(r => r.data)
+import client from './client'
+
+export const apiGetLocations = (params) =>
+  client.get('/locations/', { params }).then((res) => res.data)

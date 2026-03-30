@@ -1,10 +1,22 @@
-import api from './axios'
+import client from './client'
 
-export const apiGetShipments    = (params) => api.get('/shipments/', { params }).then(r => r.data)
-export const apiGetShipment     = (id)     => api.get(`/shipments/${id}/`).then(r => r.data)
-export const apiCreateShipment  = (data)   => api.post('/shipments/', data).then(r => r.data)
-export const apiCancelShipment  = (id, reason) => api.post(`/shipments/${id}/cancel/`, { reason }).then(r => r.data)
-export const apiConfirmDelivery = (id)     => api.post(`/shipments/${id}/confirm_delivery/`).then(r => r.data)
-export const apiConfirmPayment  = (id)     => api.post(`/shipments/${id}/confirm_payment/`).then(r => r.data)
-export const apiUpdateStatus    = (id, status, note) =>
-  api.post(`/shipments/${id}/update_status/`, { status, note }).then(r => r.data)
+export const apiGetShipments = (params) =>
+  client.get('/shipments/', { params }).then((res) => res.data)
+
+export const apiGetShipment = (id) =>
+  client.get(`/shipments/${id}/`).then((res) => res.data)
+
+export const apiCreateShipment = (data) =>
+  client.post('/shipments/', data).then((res) => res.data)
+
+export const apiCancelShipment = (id, reason) =>
+  client.post(`/shipments/${id}/cancel/`, { reason }).then((res) => res.data)
+
+export const apiConfirmDelivery = (id) =>
+  client.post(`/shipments/${id}/confirm_delivery/`).then((res) => res.data)
+
+export const apiConfirmPayment = (id) =>
+  client.post(`/shipments/${id}/confirm_payment/`).then((res) => res.data)
+
+export const apiUpdateShipmentStatus = (id, status, note = '') =>
+  client.post(`/shipments/${id}/update_status/`, { status, note }).then((res) => res.data)

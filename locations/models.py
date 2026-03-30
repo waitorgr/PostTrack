@@ -156,3 +156,36 @@ class Location(models.Model):
 
     def __str__(self):
         return f"{self.code} — {self.get_type_display()} — {self.name} ({self.city})"
+    
+    def get_parent_location(self):
+        """
+        Повертає безпосередню батьківську локацію в ієрархії:
+        POST_OFFICE -> parent_dc
+        DISTRIBUTION_CENTER -> parent_sc
+        SORTING_CENTER -> None
+        """
+        if self.parent_dc_id:
+            return self.parent_dc
+
+        if self.parent_sc_id:
+            return self.parent_sc
+
+        return None
+
+
+    def get_ancestors(self):
+        """
+        Повертає список усіх батьківських локацій вгору по ієрархії.
+        Наприклад:
+        post_office -> [distribution_center, sorting_center]
+        distribution_center -> [sorting_center]
+        sorting_center -> []
+        """
+        ancestors = []
+        current = self.get_parent_location()
+    
+        while current is not None:
+            ancestors.append(current)
+            current = current.get_parent_location()
+    
+        return ancestors

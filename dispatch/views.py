@@ -1,25 +1,101 @@
-from rest_framework import viewsets, status
+from django.db.models import Count, Q
+from django.http import FileResponse
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.utils import timezone
-from django.http import FileResponse
 
-from .models import DispatchGroup, DispatchGroupItem, DispatchGroupStatus
-from .serializers import (
-    DispatchGroupListSerializer, DispatchGroupDetailSerializer,
-    DispatchGroupCreateSerializer, AddShipmentSerializer,
-)
 from accounts.permissions import IsPostalOrWarehouse
-from shipments.models import ShipmentStatus
-from tracking.utils import create_tracking_event
 from reports.pdf_generator import (
-    generate_dispatch_depart_report,
     generate_dispatch_arrive_report,
+    generate_dispatch_depart_report,
 )
+
+from .models import DispatchGroup
+from .serializers import (
+    AddShipmentSerializer,
+    DispatchGroupCreateSerializer,
+    DispatchGroupDetailSerializer,
+    DispatchGroupListSerializer,
+)
+from .services import DispatchService
+
+
+def _normalize_role(value):
+    if value is None:
+        return ''
+
+    if hasattr(value, 'value'):
+        value = value.value
+
+    return str(value).strip().lower()
+
+
+def _is_admin_like(user):
+    if not user or not user.is_authenticated:
+        return False
+
+    if getattr(user, 'is_superuser', False):
+        return True
+
+    return _normalize_role(getattr(user, 'role', None)) == 'admin'
+
+
+def _is_logist(user):
+    if not user or not user.is_authenticated:
+        return False
+
+    if _is_admin_like(user):
+        return True
+
+    role = _normalize_role(getattr(user, 'role', None))
+    return role in {'logist', 'logistics', 'logistician'}
+
+
+class DispatchGroupAccessPermission(permissions.BasePermission):
+    """
+    Безпечна схема доступу:
+    - admin/superuser: повний доступ
+    - logist: тільки list/retrieve
+    - postal/warehouse: як і раніше, повний доступ через IsPostalOrWarehouse
+    """
+    postal_or_warehouse_permission = IsPostalOrWarehouse()
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        if _is_admin_like(user):
+            return True
+
+        if _is_logist(user):
+            return view.action in {'list', 'retrieve'}
+
+        return self.postal_or_warehouse_permission.has_permission(request, view)
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        if _is_admin_like(user):
+            return True
+
+        if _is_logist(user):
+            return view.action in {'retrieve'}
+
+        permission = self.postal_or_warehouse_permission
+
+        if hasattr(permission, 'has_object_permission'):
+            return permission.has_object_permission(request, view, obj)
+
+        return permission.has_permission(request, view)
 
 
 class DispatchGroupViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsPostalOrWarehouse]
+    permission_classes = [DispatchGroupAccessPermission]
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_serializer_class(self):
@@ -31,148 +107,172 @@ class DispatchGroupViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = DispatchGroup.objects.select_related('origin', 'destination').prefetch_related('items')
-        # Бачить лише групи своєї локації
-        if user.location:
+
+        qs = (
+            DispatchGroup.objects.select_related(
+                'origin',
+                'destination',
+                'current_location',
+                'driver',
+                'created_by',
+            )
+            .prefetch_related(
+                'items__shipment',
+                'items__added_by',
+            )
+            .annotate(_items_count=Count('items'))
+        )
+
+        # Логіст / адмін бачать overview по всіх групах
+        if not (_is_logist(user) or _is_admin_like(user)):
+            if not getattr(user, 'location', None):
+                return qs.none()
+
+            # Для поточного функціоналу залишаємо стару поведінку
             qs = qs.filter(origin=user.location)
+
         status_filter = self.request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(code__icontains=search) |
+                Q(origin__name__icontains=search) |
+                Q(destination__name__icontains=search)
+            )
+
         return qs
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+
     def perform_create(self, serializer):
-        user = self.request.user
-        # Автоматично визначаємо destination на основі ієрархії
-        destination = user.location.get_distribution_center() if hasattr(user.location, 'get_distribution_center') else None
-        if user.location.type == 'distribution_center':
-            destination = user.location.get_sorting_center()
-        
-        group = serializer.save(
-            origin=user.location,
-            destination=destination,
-            current_location=user.location,
-            created_by=user,
+        serializer.save()
+
+    def _detail_response(self, group, status_code=status.HTTP_200_OK):
+        group.refresh_from_db()
+        serializer = DispatchGroupDetailSerializer(
+            group,
+            context=self.get_serializer_context(),
+        )
+        return Response(serializer.data, status=status_code)
+
+    def _service_error_response(self, exc):
+        return Response(
+            {'detail': str(exc)},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     @action(detail=True, methods=['post'])
     def add_shipment(self, request, pk=None):
-        """POST /api/dispatch/groups/<id>/add_shipment/"""
         group = self.get_object()
-        if group.status not in (DispatchGroupStatus.FORMING, DispatchGroupStatus.READY):
-            return Response(
-                {'detail': 'Неможливо додати посилку — група вже відправлена.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+
         serializer = AddShipmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        shipment = serializer.validated_data['tracking_number']
+        shipment = serializer.validated_data['shipment']
 
-        # Посилка має бути на тій самій локації
-        if shipment.origin != group.origin and not DispatchGroupItem.objects.filter(
-            shipment=shipment, group__destination=group.origin
-        ).exists():
-            pass  # допускаємо гнучко
+        try:
+            DispatchService.add_shipment(
+                group=group,
+                shipment=shipment,
+                added_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
 
-        item, created = DispatchGroupItem.objects.get_or_create(
-            group=group, shipment=shipment,
-            defaults={'added_by': request.user}
-        )
-        if not created:
-            return Response({'detail': 'Посилка вже в цій групі.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(DispatchGroupDetailSerializer(group).data)
+        return self._detail_response(group)
 
     @action(detail=True, methods=['post'])
     def remove_shipment(self, request, pk=None):
-        """POST /api/dispatch/groups/<id>/remove_shipment/"""
         group = self.get_object()
-        if group.status not in (DispatchGroupStatus.FORMING, DispatchGroupStatus.READY):
-            return Response({'detail': 'Неможливо видалити — група вже відправлена.'}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = AddShipmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        shipment = serializer.validated_data['tracking_number']
-        deleted, _ = DispatchGroupItem.objects.filter(group=group, shipment=shipment).delete()
-        if not deleted:
-            return Response({'detail': 'Посилку не знайдено в цій групі.'}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(DispatchGroupDetailSerializer(group).data)
+        shipment = serializer.validated_data['shipment']
+
+        try:
+            DispatchService.remove_shipment(
+                group=group,
+                shipment=shipment,
+                removed_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
+
+        return self._detail_response(group)
 
     @action(detail=True, methods=['post'])
     def mark_ready(self, request, pk=None):
-        """POST /api/dispatch/groups/<id>/mark_ready/ — готово до відправки."""
         group = self.get_object()
-        group.status = DispatchGroupStatus.READY
-        group.save()
-        return Response(DispatchGroupDetailSerializer(group).data)
+
+        try:
+            DispatchService.mark_ready(
+                group=group,
+                marked_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
+
+        return self._detail_response(group)
 
     @action(detail=True, methods=['post'])
     def depart(self, request, pk=None):
-        """POST /api/dispatch/groups/<id>/depart/ — підтвердження відправки з генерацією звіту."""
         group = self.get_object()
-        if group.status != DispatchGroupStatus.READY:
-            return Response({'detail': 'Група ще не готова до відправки.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Оновлюємо статус групи
-        group.status = DispatchGroupStatus.IN_TRANSIT
-        group.departed_at = timezone.now()
-        group.save()
 
-        # Оновлюємо статуси всіх посилок у групі
-        for item in group.items.select_related('shipment'):
-            item.shipment.status = ShipmentStatus.PICKED_UP_BY_DRIVER
-            item.shipment.save()
-            create_tracking_event(
-                shipment=item.shipment,
-                event_type='picked_up_by_driver',
-                location=group.origin,
-                created_by=request.user,
-                note=f"Dispatch група {group.code}",
-                is_public=True,
+        try:
+            updated_group = DispatchService.depart(
+                group=group,
+                departed_by=request.user,
             )
-        
-        # Генеруємо звіт відправки
-        buffer = generate_dispatch_depart_report(group, handed_by=request.user)
-        
-        # Повертаємо PDF файл
+        except ValueError as exc:
+            return self._service_error_response(exc)
+
+        updated_group.refresh_from_db()
+        buffer = generate_dispatch_depart_report(updated_group, handed_by=request.user)
+
         return FileResponse(
-            buffer, 
+            buffer,
             as_attachment=True,
-            filename=f"dispatch_depart_{group.code}.pdf",
-            content_type='application/pdf'
+            filename=f'dispatch_depart_{updated_group.code}.pdf',
+            content_type='application/pdf',
         )
 
     @action(detail=True, methods=['post'])
     def arrive(self, request, pk=None):
-        """POST /api/dispatch/groups/<id>/arrive/ — підтвердження прибуття з генерацією звіту."""
         group = self.get_object()
-        if group.status != DispatchGroupStatus.IN_TRANSIT:
-            return Response({'detail': 'Група не в дорозі.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Оновлюємо статус групи
-        group.status = DispatchGroupStatus.ARRIVED
-        group.arrived_at = timezone.now()
-        group.current_location = group.destination
-        group.save()
 
-        # Оновлюємо статуси посилок
-        for item in group.items.select_related('shipment'):
-            item.shipment.status = ShipmentStatus.ARRIVED_AT_FACILITY
-            item.shipment.save()
-            create_tracking_event(
-                shipment=item.shipment,
-                event_type='arrived_at_facility',
-                location=group.destination,
-                created_by=request.user,
-                note=f"Dispatch група {group.code} прибула до {group.destination.name}.",
-                is_public=True,
+        try:
+            updated_group = DispatchService.arrive(
+                group=group,
+                arrived_by=request.user,
             )
-        
-        # Генеруємо звіт прибуття
-        buffer = generate_dispatch_arrive_report(group, received_by=request.user)
-        
-        # Повертаємо PDF файл
+        except ValueError as exc:
+            return self._service_error_response(exc)
+
+        updated_group.refresh_from_db()
+        buffer = generate_dispatch_arrive_report(updated_group, received_by=request.user)
+
         return FileResponse(
             buffer,
             as_attachment=True,
-            filename=f"dispatch_arrive_{group.code}.pdf",
-            content_type='application/pdf'
+            filename=f'dispatch_arrive_{updated_group.code}.pdf',
+            content_type='application/pdf',
         )
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        group = self.get_object()
+
+        try:
+            DispatchService.complete(
+                group=group,
+                completed_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
+
+        return self._detail_response(group)

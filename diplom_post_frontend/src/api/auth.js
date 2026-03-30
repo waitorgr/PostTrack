@@ -1,25 +1,23 @@
-import api from './axios'
+import client from './client'
 
-export const apiLogin  = (username, password) =>
-  api.post('/accounts/login/', { username, password }).then(r => r.data)
+export const apiLogin = (username, password) =>
+  client.post('/accounts/login/', { username, password }).then((res) => res.data)
 
 export const apiLogout = (refresh) =>
-  api.post('/accounts/logout/', { refresh })
+  client.post('/accounts/logout/', { refresh }).then((res) => res.data)
 
 export const apiMe = () =>
-  api.get('/accounts/me/').then(r => r.data)
+  client.get('/accounts/me/').then((res) => res.data)
 
 export const apiRegisterCustomer = (data) =>
-  api.post('/accounts/register/', data).then(r => r.data)
+  client.post('/accounts/register/', data).then((res) => res.data)
 
-export const apiGetWorkers = (params) =>
-  api.get('/accounts/workers/', { params }).then(r => r.data)
+export async function apiGetMe() {
+  const { data } = await api.get('/accounts/me/')
+  return data
+}
 
-export const apiCreateWorker = (data) =>
-  api.post('/accounts/workers/', data).then(r => r.data)
-
-export const apiUpdateWorker = (id, data) =>
-  api.patch(`/accounts/workers/${id}/`, data).then(r => r.data)
-
-export const apiDeleteWorker = (id) =>
-  api.delete(`/accounts/workers/${id}/`)
+export async function apiGetLocationDetail(locationId) {
+  const { data } = await api.get(`/locations/${locationId}/`)
+  return data
+}

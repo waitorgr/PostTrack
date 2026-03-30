@@ -1,15 +1,14 @@
+// src/main.jsx
+
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App'
-import { ThemeProvider, CssBaseline } from '@mui/material'
-import { theme } from './theme'
-import { BrowserRouter } from 'react-router-dom'
+import App from './app/App'
+import AppProvider from './app/provider'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <BrowserRouter>
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+  <React.StrictMode>
+    <AppProvider>
       <App />
-    </ThemeProvider>
-  </BrowserRouter>
+    </AppProvider>
+  </React.StrictMode>
 )

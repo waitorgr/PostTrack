@@ -1,169 +1,274 @@
-from rest_framework import generics, status
+from django.db.models import Q
+from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.views import APIView
-from django.utils import timezone
-from django.shortcuts import get_object_or_404
 
-from .models import Shipment, Payment, ShipmentStatus, PaymentType
+from accounts.models import Role
+from accounts.permissions import IsPostalWorker, IsStaff
+from dispatch.models import DispatchGroupItem
+
+from .models import Shipment
 from .serializers import (
-    ShipmentListSerializer, ShipmentCreateSerializer,
-    ShipmentDetailSerializer, ShipmentStatusUpdateSerializer,
+    PaymentConfirmSerializer,
+    ShipmentCancelSerializer,
+    ShipmentCreateSerializer,
+    ShipmentDetailSerializer,
+    ShipmentListSerializer,
+    ShipmentReturnSerializer,
+    ShipmentStatusUpdateSerializer,
 )
-from accounts.permissions import IsPostalWorker, IsPostalOrWarehouse, IsStaff
-from tracking.utils import create_tracking_event
+from .services import ShipmentService
+from django.core.exceptions import ValidationError as DjangoValidationError
 
+from rest_framework.permissions import AllowAny
 
 class ShipmentViewSet(ModelViewSet):
-    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_permissions(self):
-        if self.action == 'create':
+        if self.action == "track":
+            return [AllowAny()]
+        if self.action == "create":
             return [IsPostalWorker()]
         return [IsStaff()]
+    
+    @action(
+    detail=False,
+    methods=["get"],
+    url_path=r"track/(?P<tracking_number>[^/.]+)",
+)
+    def track(self, request, tracking_number=None):
+        tracking_number = (tracking_number or "").strip()
+    
+        shipment = Shipment.objects.select_related(
+            "origin",
+            "destination",
+            "created_by",
+            "payment",
+        ).filter(
+            tracking_number__iexact=tracking_number
+        ).first()
+    
+        if not shipment:
+            return Response(
+                {"detail": "Посилку з таким трек-номером не знайдено."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+    
+        return Response(
+            ShipmentDetailSerializer(
+                shipment,
+                context=self.get_serializer_context(),
+            ).data
+        )
 
     def get_serializer_class(self):
-        if self.action == 'create':
+        if self.action == "create":
             return ShipmentCreateSerializer
-        if self.action in ('list',):
+        if self.action == "list":
             return ShipmentListSerializer
+        if self.action == "update_status":
+            return ShipmentStatusUpdateSerializer
+        if self.action == "cancel":
+            return ShipmentCancelSerializer
+        if self.action == "confirm_payment":
+            return PaymentConfirmSerializer
+        if self.action == "return_shipment":
+            return ShipmentReturnSerializer
         return ShipmentDetailSerializer
 
     def get_queryset(self):
         user = self.request.user
-        from accounts.models import Role
-        qs = Shipment.objects.select_related('origin', 'destination', 'created_by', 'payment')
+
+        qs = Shipment.objects.select_related(
+            "origin",
+            "destination",
+            "created_by",
+            "payment",
+        )
 
         if user.role == Role.POSTAL_WORKER:
-            # бачить тільки посилки свого відділення
-            qs = qs.filter(origin=user.location) | qs.filter(destination=user.location)
+            qs = qs.filter(Q(origin=user.location) | Q(destination=user.location))
+
         elif user.role in (Role.SORTING_CENTER_WORKER, Role.DISTRIBUTION_CENTER_WORKER):
-            # посилки на своєму складі (через dispatch)
-            from dispatch.models import DispatchGroupItem
             shipment_ids = DispatchGroupItem.objects.filter(
                 group__current_location=user.location
-            ).values_list('shipment_id', flat=True)
+            ).values_list("shipment_id", flat=True)
             qs = qs.filter(id__in=shipment_ids)
-        elif user.role == Role.CUSTOMER:
-            # клієнт не має доступу через цей endpoint
-            qs = qs.none()
-        # logist, admin — всі посилки
 
-        # фільтри
-        status_filter = self.request.query_params.get('status')
+        elif user.role == Role.CUSTOMER:
+            qs = qs.none()
+
+        status_filter = self.request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        search = self.request.query_params.get('search')
+
+        search = self.request.query_params.get("search")
         if search:
-            qs = qs.filter(tracking_number__icontains=search)
+            qs = qs.filter(
+                Q(tracking_number__icontains=search)
+                | Q(sender_first_name__icontains=search)
+                | Q(sender_last_name__icontains=search)
+                | Q(receiver_first_name__icontains=search)
+                | Q(receiver_last_name__icontains=search)
+                | Q(sender_phone__icontains=search)
+                | Q(receiver_phone__icontains=search)
+            )
 
         return qs.distinct()
 
-    def perform_create(self, serializer):
+    def _ensure_role(self, *allowed_roles):
         user = self.request.user
-        shipment = serializer.save(
-            origin=user.location,
-            created_by=user,
-        )
-        # Створюємо запис оплати
-        Payment.objects.create(
-            shipment=shipment,
-            amount=shipment.price,
-            is_paid=(shipment.payment_type == PaymentType.PREPAID),
-        )
-        # Трекінг-подія
-        create_tracking_event(
-            shipment=shipment,
-            event_type='accepted',
-            location=user.location,
-            created_by=user,
-            note='Посилку прийнято та зареєстровано у системі.',
-            is_public=True,
+        if user.role not in allowed_roles:
+            raise PermissionDenied("У вас немає прав для цієї дії.")
+
+    def _serialize_detail(self, shipment: Shipment):
+        return ShipmentDetailSerializer(
+            shipment,
+            context=self.get_serializer_context(),
+        ).data
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+    
+        try:
+            shipment = ShipmentService.create_shipment(
+                data=serializer.validated_data,
+                created_by=request.user,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise ValidationError(exc.message_dict)
+            if hasattr(exc, "messages"):
+                raise ValidationError({"detail": exc.messages})
+            raise ValidationError({"detail": str(exc)})
+    
+        headers = self.get_success_headers({"tracking_number": shipment.tracking_number})
+        return Response(
+            self._serialize_detail(shipment),
+            status=status.HTTP_201_CREATED,
+            headers=headers,
         )
 
-    @action(detail=True, methods=['post'], permission_classes=[IsPostalOrWarehouse])
+    @action(detail=True, methods=["post"])
     def update_status(self, request, pk=None):
-        """POST /api/shipments/<id>/update_status/"""
+        """
+        POST /api/shipments/<id>/update_status/
+        """
+        self._ensure_role(
+            Role.POSTAL_WORKER,
+            Role.SORTING_CENTER_WORKER,
+            Role.DISTRIBUTION_CENTER_WORKER,
+            Role.ADMIN,
+        )
+
         shipment = self.get_object()
-        serializer = ShipmentStatusUpdateSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        new_status = serializer.validated_data['status']
-        note = serializer.validated_data.get('note', '')
+        try:
+            shipment = ShipmentService.update_status(
+                shipment=shipment,
+                new_status=serializer.validated_data["status"],
+                performed_by=request.user,
+                note=serializer.validated_data.get("note", ""),
+            )
+        except ValueError as exc:
+            raise ValidationError({"status": str(exc)})
 
-        shipment.status = new_status
-        shipment.save()
+        return Response(self._serialize_detail(shipment))
 
-        create_tracking_event(
-            shipment=shipment,
-            event_type=new_status,
-            location=request.user.location,
-            created_by=request.user,
-            note=note,
-            is_public=True,
-        )
-        return Response(ShipmentDetailSerializer(shipment).data)
-
-    @action(detail=True, methods=['post'], permission_classes=[IsPostalOrWarehouse])
+    @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        """POST /api/shipments/<id>/cancel/"""
-        shipment = self.get_object()
-        if shipment.status in (ShipmentStatus.DELIVERED, ShipmentStatus.CANCELLED, ShipmentStatus.RETURNED):
-            return Response(
-                {'detail': 'Неможливо скасувати посилку в поточному статусі.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        shipment.status = ShipmentStatus.CANCELLED
-        shipment.save()
-        create_tracking_event(
-            shipment=shipment,
-            event_type='cancelled',
-            location=request.user.location,
-            created_by=request.user,
-            note=request.data.get('reason', 'Посилку скасовано.'),
-            is_public=True,
+        """
+        POST /api/shipments/<id>/cancel/
+        """
+        self._ensure_role(
+            Role.POSTAL_WORKER,
+            Role.SORTING_CENTER_WORKER,
+            Role.DISTRIBUTION_CENTER_WORKER,
+            Role.ADMIN,
         )
-        return Response({'detail': 'Посилку скасовано.'})
 
-    @action(detail=True, methods=['post'], permission_classes=[IsPostalWorker])
+        shipment = self.get_object()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            shipment = ShipmentService.cancel_shipment(
+                shipment=shipment,
+                reason=serializer.validated_data.get("reason", ""),
+                cancelled_by=request.user,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        return Response(self._serialize_detail(shipment))
+
+    @action(detail=True, methods=["post"])
     def confirm_delivery(self, request, pk=None):
-        """POST /api/shipments/<id>/confirm_delivery/ — підтвердження доставки."""
-        shipment = self.get_object()
-        if shipment.status == ShipmentStatus.DELIVERED:
-            return Response({'detail': 'Вже доставлено.'}, status=status.HTTP_400_BAD_REQUEST)
-        shipment.status = ShipmentStatus.DELIVERED
-        shipment.save()
-        # Якщо cash_on_delivery — підтверджуємо оплату
-        if shipment.payment_type == PaymentType.CASH_ON_DELIVERY:
-            payment, _ = Payment.objects.get_or_create(
-                shipment=shipment, defaults={'amount': shipment.price}
-            )
-            payment.is_paid = True
-            payment.paid_at = timezone.now()
-            payment.received_by = request.user
-            payment.save()
-        create_tracking_event(
-            shipment=shipment,
-            event_type='delivered',
-            location=request.user.location,
-            created_by=request.user,
-            note='Посилку доставлено отримувачу.',
-            is_public=True,
-        )
-        return Response(ShipmentDetailSerializer(shipment).data)
+        """
+        POST /api/shipments/<id>/confirm_delivery/
+        """
+        self._ensure_role(Role.POSTAL_WORKER, Role.ADMIN)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsPostalWorker])
-    def confirm_payment(self, request, pk=None):
-        """POST /api/shipments/<id>/confirm_payment/ — ручне підтвердження оплати."""
         shipment = self.get_object()
-        payment, _ = Payment.objects.get_or_create(
-            shipment=shipment, defaults={'amount': shipment.price}
-        )
-        if payment.is_paid:
-            return Response({'detail': 'Вже оплачено.'}, status=status.HTTP_400_BAD_REQUEST)
-        payment.is_paid = True
-        payment.paid_at = timezone.now()
-        payment.received_by = request.user
-        payment.save()
-        return Response({'detail': 'Оплату підтверджено.'})
+
+        try:
+            shipment = ShipmentService.confirm_delivery(
+                shipment=shipment,
+                confirmed_by=request.user,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        return Response(self._serialize_detail(shipment))
+
+    @action(detail=True, methods=["post"])
+    def confirm_payment(self, request, pk=None):
+        """
+        POST /api/shipments/<id>/confirm_payment/
+        """
+        self._ensure_role(Role.POSTAL_WORKER, Role.ADMIN)
+
+        shipment = self.get_object()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            ShipmentService.confirm_payment(
+                shipment=shipment,
+                confirmed_by=request.user,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        shipment.refresh_from_db()
+        return Response(self._serialize_detail(shipment))
+
+    @action(detail=True, methods=["post"])
+    def return_shipment(self, request, pk=None):
+        """
+        POST /api/shipments/<id>/return_shipment/
+        """
+        self._ensure_role(Role.POSTAL_WORKER, Role.ADMIN)
+
+        shipment = self.get_object()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            shipment = ShipmentService.initiate_return(
+                shipment=shipment,
+                reason=serializer.validated_data.get("reason", ""),
+                initiated_by=request.user,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        return Response(self._serialize_detail(shipment))
