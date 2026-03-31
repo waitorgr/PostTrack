@@ -292,12 +292,37 @@ class RouteStep(models.Model):
             errors['order'] = 'Порядок кроку має бути більше нуля.'
 
         if self.route_id:
-            if self.route.status not in {RouteStatus.DRAFT, RouteStatus.CONFIRMED}:
-                errors['route'] = 'Редагувати кроки можна лише у маршруті зі статусом "Чернетка" або "Підтверджено".'
+            route_status = self.route.status
+        
+            if route_status in {RouteStatus.COMPLETED, RouteStatus.CANCELLED}:
+                errors['route'] = 'Редагувати кроки не можна для завершеного або скасованого маршруту.'
+        
+            elif route_status == RouteStatus.IN_PROGRESS:
+                if not self.pk:
+                    errors['route'] = 'Не можна додавати нові кроки до маршруту, який виконується.'
+                else:
+                    old_step = type(self).objects.filter(pk=self.pk).first()
+        
+                    if old_step:
+                        restricted_fields_changed = any([
+                            old_step.route_id != self.route_id,
+                            old_step.order != self.order,
+                            old_step.location_id != self.location_id,
+                            old_step.step_type != self.step_type,
+                            old_step.planned_arrival != self.planned_arrival,
+                            old_step.planned_departure != self.planned_departure,
+                            old_step.notes != self.notes,
+                        ])
+        
+                        if restricted_fields_changed:
+                            errors['route'] = (
+                                'Під час виконання маршруту можна оновлювати лише фактичні '
+                                'часи прибуття/виїзду, але не структуру кроків.'
+                            )
 
             if self.step_type == RouteStepType.ORIGIN and self.route.origin_id and self.location_id != self.route.origin_id:
                 errors['location'] = 'Стартовий крок має збігатися з origin маршруту.'
-
+        
             if self.step_type == RouteStepType.DESTINATION and self.route.destination_id and self.location_id != self.route.destination_id:
                 errors['location'] = 'Кінцевий крок має збігатися з destination маршруту.'
 

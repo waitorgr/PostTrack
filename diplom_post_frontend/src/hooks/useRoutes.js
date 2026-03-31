@@ -8,6 +8,8 @@ import {
   apiStartRoute,
   apiCompleteRoute,
   apiGenerateDefaultRouteSteps,
+  apiMarkRouteStepArrival,
+  apiMarkRouteStepDeparture,
 } from '../api/routes'
 
 export function useRoutes(params) {
@@ -92,6 +94,30 @@ export function useGenerateDefaultRouteSteps() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['routes'] })
       queryClient.invalidateQueries({ queryKey: ['route', id] })
+    },
+  })
+}
+
+export function useMarkRouteStepArrival() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ routeId, data }) => apiMarkRouteStepArrival(routeId, data),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['routes'] })
+      queryClient.invalidateQueries({ queryKey: ['route', variables.routeId] })
+    },
+  })
+}
+
+export function useMarkRouteStepDeparture() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ routeId, data }) => apiMarkRouteStepDeparture(routeId, data),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['routes'] })
+      queryClient.invalidateQueries({ queryKey: ['route', variables.routeId] })
     },
   })
 }

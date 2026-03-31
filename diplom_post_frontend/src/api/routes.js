@@ -23,3 +23,9 @@ export const apiCompleteRoute = (id) =>
 
 export const apiGenerateDefaultRouteSteps = (id) =>
   client.post(`/logistics/routes/${id}/generate_default_steps/`).then((res) => res.data)
+
+export const apiMarkRouteStepArrival = (routeId, data) =>
+  client.post(`/logistics/routes/${routeId}/mark_step_arrival/`, data).then((res) => res.data)
+
+export const apiMarkRouteStepDeparture = (routeId, data) =>
+  client.post(`/logistics/routes/${routeId}/mark_step_departure/`, data).then((res) => res.data)

@@ -496,9 +496,8 @@ class RouteService:
             raise ValueError('Останній крок маршруту має бути кінцевою точкою.')
 
         if last_step.actual_arrival is None:
-            arrival_time = timezone.now()
-            type(last_step).objects.filter(pk=last_step.pk).update(actual_arrival=arrival_time)
-            last_step.actual_arrival = arrival_time
+            last_step.actual_arrival = timezone.now()
+            last_step.save(update_fields=['actual_arrival'])
 
         if sync_dispatch:
             RouteService._arrive_dispatch_group(route, completed_by)
