@@ -3,7 +3,7 @@ import StatusBadge from './StatusBadge'
 import { fDateTime } from '../../utils/formatters'
 import EmptyState from '../common/EmptyState'
 
-export default function TrackingTimeline({ events = [] }) {
+export default function TrackingTimeline({ events = [], variant = 'default' }) {
   if (!events.length) {
     return (
       <EmptyState
@@ -13,36 +13,51 @@ export default function TrackingTimeline({ events = [] }) {
     )
   }
 
+  const isPublic = variant === 'public'
+
   return (
-    <Stack divider={<Divider />} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 3 }}>
+    <Stack
+      divider={<Divider />}
+      sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 3 }}
+    >
       {events.map((event, index) => (
         <Box key={event.id || index} sx={{ p: 2 }}>
-          <Stack spacing={1}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" gap={2}>
+          <Stack spacing={0.75}>
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              gap={2}
+              flexWrap="wrap"
+            >
               <Typography variant="subtitle1" fontWeight={700}>
-                {event.event_type_label || event.title || 'Подія'}
+                {event.title || event.event_type_label || 'Подія'}
               </Typography>
 
-              {event.status && <StatusBadge status={event.status} type="shipment" />}
+              {!isPublic && event.status && (
+                <StatusBadge status={event.status} type="shipment" />
+              )}
             </Box>
 
-            <Typography variant="body2" color="text.secondary">
-              {fDateTime(event.created_at)}
-            </Typography>
+            {event.created_at && (
+              <Typography variant="body2" color="text.secondary">
+                {fDateTime(event.created_at)}
+              </Typography>
+            )}
 
-            {event.location?.name && (
+            {!isPublic && event.location?.name && (
               <Typography variant="body2">
                 Локація: {event.location.name}
               </Typography>
             )}
 
-            {event.note && (
+            {!isPublic && event.note && (
               <Typography variant="body2">
                 {event.note}
               </Typography>
             )}
 
-            {event.created_by?.username && (
+            {!isPublic && event.created_by?.username && (
               <Typography variant="caption" color="text.secondary">
                 Виконав: {event.created_by.username}
               </Typography>

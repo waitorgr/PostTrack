@@ -11,7 +11,10 @@ import { useShipments } from '../../hooks/useShipments'
 
 export default function PostalDashboard() {
   const navigate = useNavigate()
-  const { data, isLoading, isError, refetch } = useShipments({ page_size: 8 })
+  const { data, isLoading, isError, refetch } = useShipments({
+    page_size: 8,
+    only_current_location: true,
+  })
 
   const shipments = data?.results || data || []
   const today = dayjs().format('YYYY-MM-DD')

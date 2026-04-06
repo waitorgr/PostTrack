@@ -14,6 +14,7 @@ import {
   useCancelShipment,
   useConfirmShipmentDelivery,
   useConfirmShipmentPayment,
+  useUpdateShipmentStatus,
 } from '../../hooks/useShipments'
 import { fDateTime } from '../../utils/formatters'
 
@@ -24,6 +25,7 @@ export default function ShipmentDetails() {
   const { data: shipment, isLoading, isError, refetch } = useShipment(id)
 
   const confirmPaymentMutation = useConfirmShipmentPayment()
+  const markArrivalMutation = useUpdateShipmentStatus()
   const confirmDeliveryMutation = useConfirmShipmentDelivery()
   const cancelMutation = useCancelShipment()
 
@@ -36,14 +38,39 @@ export default function ShipmentDetails() {
   const paymentLabel = isPaid ? 'Оплачено' : 'Не оплачено'
   const paymentColor = isPaid ? 'success' : 'warning'
 
-  const canConfirmPayment =
-    !isPaid &&
-    shipment.status !== 'cancelled' &&
-    shipment.status !== 'delivered'
+  const isAtDestination =
+    String(shipment.current_location_id ?? '') === String(shipment.destination ?? '') ||
+    (
+      shipment.current_location_name &&
+      shipment.destination_name &&
+      shipment.current_location_name === shipment.destination_name
+    )
+
+  const isTerminal = ['delivered', 'cancelled', 'returned'].includes(shipment.status)
+  const canConfirmPayment = !isPaid && !isTerminal
+
+  const canConfirmArrival =
+    isAtDestination &&
+    !isTerminal &&
+    shipment.status !== 'available_for_pickup'
+
+  const canConfirmDelivery =
+    isPaid &&
+    shipment.status === 'available_for_pickup' &&
+    shipment.status !== 'delivered' &&
+    shipment.status !== 'cancelled'
 
   const handleConfirmAction = async () => {
     if (confirmType === 'payment') {
       await confirmPaymentMutation.mutateAsync(shipment.id)
+    }
+
+    if (confirmType === 'arrival') {
+      await markArrivalMutation.mutateAsync({
+        id: shipment.id,
+        status: 'available_for_pickup',
+        note: 'Посилка прибула до відділення призначення та готова до видачі.',
+      })
     }
 
     if (confirmType === 'delivery') {
@@ -89,13 +116,19 @@ export default function ShipmentDetails() {
               </Button>
             )}
 
-            {shipment.status === 'available_for_pickup' && (
+            {canConfirmArrival && (
+              <Button color="info" onClick={() => setConfirmType('arrival')}>
+                Підтвердити прибуття
+              </Button>
+            )}
+
+            {canConfirmDelivery && (
               <Button color="success" onClick={() => setConfirmType('delivery')}>
                 Видати отримувачу
               </Button>
             )}
 
-            {shipment.status !== 'delivered' && shipment.status !== 'cancelled' && (
+            {!isTerminal && (
               <Button color="error" onClick={() => setConfirmType('cancel')}>
                 Скасувати
               </Button>
@@ -106,6 +139,7 @@ export default function ShipmentDetails() {
 
       <Stack spacing={3}>
         {(confirmPaymentMutation.isError ||
+          markArrivalMutation.isError ||
           confirmDeliveryMutation.isError ||
           cancelMutation.isError) && (
           <Alert severity="error">
@@ -155,6 +189,9 @@ export default function ShipmentDetails() {
                 <strong>Куди:</strong> {shipment.destination?.name || shipment.destination_name || '—'}
               </Typography>
               <Typography>
+                <strong>Поточна локація:</strong> {shipment.current_location?.name || shipment.current_location_name || '—'}
+              </Typography>
+              <Typography>
                 <strong>Тип оплати:</strong> {shipment.payment_type_display || shipment.payment_type || '—'}
               </Typography>
               <Typography>
@@ -181,20 +218,25 @@ export default function ShipmentDetails() {
         message={
           confirmType === 'payment'
             ? 'Підтвердити оплату цієї посилки?'
-            : confirmType === 'delivery'
-              ? 'Підтвердити видачу посилки отримувачу?'
-              : 'Скасувати цю посилку?'
+            : confirmType === 'arrival'
+              ? 'Підтвердити прибуття посилки до відділення призначення та перевести її у статус очікування видачі?'
+              : confirmType === 'delivery'
+                ? 'Підтвердити видачу посилки отримувачу?'
+                : 'Скасувати цю посилку?'
         }
         confirmText={
           confirmType === 'payment'
             ? 'Підтвердити оплату'
-            : confirmType === 'delivery'
-              ? 'Підтвердити видачу'
-              : 'Скасувати посилку'
+            : confirmType === 'arrival'
+              ? 'Підтвердити прибуття'
+              : confirmType === 'delivery'
+                ? 'Підтвердити видачу'
+                : 'Скасувати посилку'
         }
         confirmColor={confirmType === 'cancel' ? 'error' : 'primary'}
         loading={
           confirmPaymentMutation.isPending ||
+          markArrivalMutation.isPending ||
           confirmDeliveryMutation.isPending ||
           cancelMutation.isPending
         }

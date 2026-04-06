@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useParams } from 'react-router-dom'
 
 import PublicLayout from '../layouts/PublicLayout'
 import CustomerLayout from '../layouts/CustomerLayout'
@@ -32,6 +32,7 @@ const WarehouseDashboard = lazy(() => import('../pages/warehouse/WarehouseDashbo
 const IncomingGroups = lazy(() => import('../pages/warehouse/IncomingGroups'))
 const WarehouseParcels = lazy(() => import('../pages/warehouse/WarehouseParcels'))
 const SortingInterface = lazy(() => import('../pages/warehouse/SortingInterface'))
+const WarehouseDispatchDetails = lazy(() => import('../pages/postal/DispatchDetails'))
 
 const LogistDashboard = lazy(() => import('../pages/logist/LogistDashboard'))
 const RouteList = lazy(() => import('../pages/logist/RouteList'))
@@ -61,6 +62,12 @@ const SystemSettings = lazy(() => import('../pages/admin/SystemSettings'))
 const UnauthorizedPage = lazy(() => import('../pages/errors/UnauthorizedPage'))
 const NotFoundPage = lazy(() => import('../pages/errors/NotFoundPage'))
 
+
+function LegacyPostalDispatchRedirect() {
+  const { id } = useParams()
+  return <Navigate to={id ? `/postal/dispatch/${id}` : '/postal/dispatch'} replace />
+}
+
 function withSuspense(element) {
   return (
     <Suspense fallback={<LoadingSpinner minHeight={320} />}>
@@ -70,6 +77,16 @@ function withSuspense(element) {
 }
 
 export const router = createBrowserRouter([
+
+  {
+    path: '/dispatch/groups',
+    element: <Navigate to="/postal/dispatch" replace />,
+  },
+  {
+    path: '/dispatch/groups/:id',
+    element: <LegacyPostalDispatchRedirect />,
+  },
+
   {
     path: '/',
     element: <PublicLayout />,
@@ -124,7 +141,7 @@ export const router = createBrowserRouter([
 
   {
     path: '/warehouse',
-    element: <RoleGuard allowedRoles={['warehouse_worker', 'admin']} />,
+    element: <RoleGuard allowedRoles={['sorting_center_worker', 'distribution_center_worker', 'admin']} />,
     children: [
       {
         element: <InternalLayout />,
@@ -134,6 +151,7 @@ export const router = createBrowserRouter([
           { path: 'incoming', element: withSuspense(<IncomingGroups />) },
           { path: 'parcels', element: withSuspense(<WarehouseParcels />) },
           { path: 'sorting', element: withSuspense(<SortingInterface />) },
+          { path: 'dispatch/:id', element: withSuspense(<WarehouseDispatchDetails />) },
         ],
       },
     ],

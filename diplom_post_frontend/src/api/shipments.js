@@ -20,3 +20,6 @@ export const apiConfirmPayment = (id) =>
 
 export const apiUpdateShipmentStatus = (id, status, note = '') =>
   client.post(`/shipments/${id}/update_status/`, { status, note }).then((res) => res.data)
+
+export const apiManualSortShipment = (id) =>
+  client.post(`/shipments/${id}/manual_sort/`).then((res) => res.data)

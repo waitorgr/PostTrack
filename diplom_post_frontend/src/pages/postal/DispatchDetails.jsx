@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Alert, Box, Divider, Stack, Typography } from '@mui/material'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PageHeader from '../../components/common/PageHeader'
 import Input from '../../components/ui/Input'
@@ -14,6 +14,7 @@ import StatusBadge from '../../components/domain/StatusBadge'
 import {
   apiAddShipmentToDispatch,
   apiArriveDispatch,
+  apiDeleteDispatchGroup,
   apiDepartDispatch,
   apiGetDispatchGroup,
   apiMarkDispatchReady,
@@ -23,6 +24,7 @@ import { fDateTime } from '../../utils/formatters'
 
 export default function DispatchDetails() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const [trackingNumber, setTrackingNumber] = useState('')
@@ -64,6 +66,13 @@ export default function DispatchDetails() {
       await invalidate()
       refetch()
     },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          Object.values(error.response?.data || {}).flat().join(' ') ||
+          'Не вдалося видалити посилку'
+      )
+    },
   })
 
   const markReadyMutation = useMutation({
@@ -73,23 +82,59 @@ export default function DispatchDetails() {
       await invalidate()
       refetch()
     },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          Object.values(error.response?.data || {}).flat().join(' ') ||
+          'Не вдалося змінити статус групи'
+      )
+    },
   })
 
   const departMutation = useMutation({
     mutationFn: apiDepartDispatch,
     onSuccess: async () => {
-      setMessage('Групу відправлено')
+      setMessage('Групу відправлено. PDF-звіт завантажено.')
       await invalidate()
       refetch()
+    },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          Object.values(error.response?.data || {}).flat().join(' ') ||
+          'Не вдалося відправити групу'
+      )
     },
   })
 
   const arriveMutation = useMutation({
     mutationFn: apiArriveDispatch,
     onSuccess: async () => {
-      setMessage('Прибуття групи підтверджено')
+      setMessage('Прибуття групи підтверджено. PDF-звіт завантажено.')
       await invalidate()
       refetch()
+    },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          Object.values(error.response?.data || {}).flat().join(' ') ||
+          'Не вдалося підтвердити прибуття групи'
+      )
+    },
+  })
+
+  const deleteDispatchMutation = useMutation({
+    mutationFn: apiDeleteDispatchGroup,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['dispatch-groups'] })
+      navigate('/postal/dispatch')
+    },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          Object.values(error.response?.data || {}).flat().join(' ') ||
+          'Не вдалося видалити dispatch-групу'
+      )
     },
   })
 
@@ -97,16 +142,16 @@ export default function DispatchDetails() {
   if (isError || !dispatchGroup) return <ErrorState onRetry={refetch} />
 
   const shipments = dispatchGroup.shipments?.length
-  ? dispatchGroup.shipments
-  : (dispatchGroup.items || []).map((item) => ({
-      ...(item.shipment_detail || {}),
-      dispatch_item_id: item.id,
-      tracking_number:
-        item.shipment_tracking_number ||
-        item.shipment_detail?.tracking_number ||
-        '',
-      shipment_id: item.shipment,
-    }))
+    ? dispatchGroup.shipments
+    : (dispatchGroup.items || []).map((item) => ({
+        ...(item.shipment_detail || {}),
+        dispatch_item_id: item.id,
+        tracking_number:
+          item.shipment_tracking_number ||
+          item.shipment_detail?.tracking_number ||
+          '',
+        shipment_id: item.shipment,
+      }))
 
   const handleAddShipment = async () => {
     if (!trackingNumber.trim()) return
@@ -130,6 +175,10 @@ export default function DispatchDetails() {
       await arriveMutation.mutateAsync(dispatchGroup.id)
     }
 
+    if (confirmType === 'delete') {
+      await deleteDispatchMutation.mutateAsync(dispatchGroup.id)
+    }
+
     setConfirmType(null)
   }
 
@@ -141,9 +190,15 @@ export default function DispatchDetails() {
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
             {dispatchGroup.status === 'forming' && (
-              <Button color="warning" onClick={() => setConfirmType('ready')}>
-                Позначити готовою
-              </Button>
+              <>
+                <Button color="warning" onClick={() => setConfirmType('ready')}>
+                  Позначити готовою
+                </Button>
+
+                <Button color="error" onClick={() => setConfirmType('delete')}>
+                  Видалити групу
+                </Button>
+              </>
             )}
 
             {dispatchGroup.status === 'ready' && (
@@ -182,10 +237,19 @@ export default function DispatchDetails() {
               <strong>Створено:</strong> {fDateTime(dispatchGroup.created_at)}
             </Typography>
             <Typography>
-              <strong>Походження:</strong> {dispatchGroup.origin?.name || dispatchGroup.origin_name || '—'}
+              <strong>Статус:</strong> {dispatchGroup.status_display || dispatchGroup.status || '—'}
             </Typography>
             <Typography>
-              <strong>Призначення:</strong> {dispatchGroup.destination?.name || dispatchGroup.destination_name || '—'}
+              <strong>Походження:</strong> {dispatchGroup.origin_name || '—'}
+            </Typography>
+            <Typography>
+              <strong>Призначення:</strong> {dispatchGroup.destination_name || '—'}
+            </Typography>
+            <Typography>
+              <strong>Поточна локація:</strong> {dispatchGroup.current_location_name || '—'}
+            </Typography>
+            <Typography>
+              <strong>Кількість посилок:</strong> {dispatchGroup.shipment_count ?? shipments.length ?? 0}
             </Typography>
           </Stack>
         </Card>
@@ -264,19 +328,24 @@ export default function DispatchDetails() {
             ? 'Позначити групу як готову до відправлення?'
             : confirmType === 'depart'
               ? 'Підтвердити відправлення цієї групи?'
-              : 'Підтвердити прибуття цієї групи?'
+              : confirmType === 'delete'
+                ? 'Видалити цю dispatch-групу? Цю дію не можна скасувати.'
+                : 'Підтвердити прибуття цієї групи?'
         }
         confirmText={
           confirmType === 'ready'
             ? 'Позначити готовою'
             : confirmType === 'depart'
               ? 'Відправити'
-              : 'Підтвердити прибуття'
+              : confirmType === 'delete'
+                ? 'Видалити'
+                : 'Підтвердити прибуття'
         }
         loading={
           markReadyMutation.isPending ||
           departMutation.isPending ||
-          arriveMutation.isPending
+          arriveMutation.isPending ||
+          deleteDispatchMutation.isPending
         }
       />
     </>

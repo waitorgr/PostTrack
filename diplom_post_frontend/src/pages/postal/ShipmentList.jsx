@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom'
 import PageHeader from '../../components/common/PageHeader'
 import SearchBar from '../../components/common/SearchBar'
 import FilterPanel from '../../components/common/FilterPanel'
-import Pagination from '../../components/common/Pagination'
 import ErrorState from '../../components/common/ErrorState'
 import ShipmentTable from '../../components/domain/ShipmentTable'
 import Button from '../../components/ui/Button'
@@ -12,14 +11,11 @@ import Select from '../../components/ui/Select'
 import { useShipments } from '../../hooks/useShipments'
 import { SHIPMENT_STATUS_LABELS } from '../../utils/statusConfig'
 
-const PAGE_SIZE = 10
-
 export default function ShipmentList() {
   const navigate = useNavigate()
 
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
-  const [page, setPage] = useState(1)
 
   const statusOptions = useMemo(
     () => [
@@ -33,8 +29,7 @@ export default function ShipmentList() {
   )
 
   const queryParams = {
-    page,
-    page_size: PAGE_SIZE,
+    page_size: 1000,
     ...(search ? { search } : {}),
     ...(status ? { status } : {}),
   }
@@ -42,14 +37,12 @@ export default function ShipmentList() {
   const { data, isLoading, isError, refetch } = useShipments(queryParams)
 
   const rows = data?.results || data || []
-  const totalCount = data?.count || rows.length
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
   return (
     <>
       <PageHeader
         title="Посилки"
-        subtitle="Пошук, фільтрація та перегляд посилок відділення"
+        subtitle="Пошук, фільтрація та перегляд усіх посилок"
         actions={
           <Button onClick={() => navigate('/postal/shipments/create')}>
             Створити посилку
@@ -58,16 +51,10 @@ export default function ShipmentList() {
       />
 
       <FilterPanel>
-        <Stack
-          direction={{ xs: 'column', md: 'row' }}
-          spacing={2}
-        >
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
           <SearchBar
             value={search}
-            onChange={(value) => {
-              setSearch(value)
-              setPage(1)
-            }}
+            onChange={setSearch}
             placeholder="Пошук за трек-номером, описом..."
           />
 
@@ -75,10 +62,7 @@ export default function ShipmentList() {
             <Select
               label="Статус"
               value={status}
-              onChange={(e) => {
-                setStatus(e.target.value)
-                setPage(1)
-              }}
+              onChange={(e) => setStatus(e.target.value)}
               options={statusOptions}
             />
           </Box>
@@ -88,19 +72,11 @@ export default function ShipmentList() {
       {isError ? (
         <ErrorState onRetry={refetch} />
       ) : (
-        <>
-          <ShipmentTable
-            rows={rows}
-            loading={isLoading}
-            onRowClick={(row) => navigate(`/postal/shipments/${row.id}`)}
-          />
-
-          <Pagination
-            page={page}
-            count={totalPages}
-            onChange={setPage}
-          />
-        </>
+        <ShipmentTable
+          rows={rows}
+          loading={isLoading}
+          onRowClick={(row) => navigate(`/postal/shipments/${row.id}`)}
+        />
       )}
     </>
   )

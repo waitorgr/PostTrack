@@ -1,5 +1,12 @@
 // src/utils/navigationConfig.js
 
+const warehouseNavigation = [
+  { label: 'Головна', to: '/warehouse/dashboard' },
+  { label: 'Вхідні групи', to: '/warehouse/incoming' },
+  { label: 'Невідсортовані посилки', to: '/warehouse/parcels' },
+  { label: 'Dispatch-групи', to: '/warehouse/sorting' },
+]
+
 export const NAVIGATION_CONFIG = {
   customer: [
     { label: 'Головна', to: '/customer/dashboard' },
@@ -13,12 +20,8 @@ export const NAVIGATION_CONFIG = {
     { label: 'Dispatch', to: '/postal/dispatch' },
   ],
 
-  warehouse_worker: [
-    { label: 'Головна', to: '/warehouse/dashboard' },
-    { label: 'Вхідні групи', to: '/warehouse/incoming' },
-    { label: 'Посилки вузла', to: '/warehouse/parcels' },
-    { label: 'Сортування', to: '/warehouse/sorting' },
-  ],
+  sorting_center_worker: warehouseNavigation,
+  distribution_center_worker: warehouseNavigation,
 
   logist: [
     { label: 'Головна', to: '/logist/dashboard' },

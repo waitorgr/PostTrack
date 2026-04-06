@@ -1,3 +1,5 @@
+from tokenize import group
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -49,6 +51,30 @@ class DispatchService:
         raise ValueError(str(exc))
 
     @staticmethod
+    def get_or_create_open_group(origin, destination, created_by=None):
+        group = (
+            DispatchGroup.objects.filter(
+                origin=origin,
+                destination=destination,
+                status__in=(DispatchGroupStatus.FORMING, DispatchGroupStatus.READY),
+            )
+            .order_by('status', '-created_at')
+            .first()
+        )
+
+        created = False
+        if group is None:
+            group = DispatchGroup.objects.create(
+                origin=origin,
+                destination=destination,
+                current_location=origin,
+                created_by=created_by,
+            )
+            created = True
+
+        return group, created
+
+    @staticmethod
     @transaction.atomic
     def add_shipment(group: DispatchGroup, shipment, added_by):
         if group.status not in (DispatchGroupStatus.FORMING, DispatchGroupStatus.READY):
@@ -61,6 +87,20 @@ class DispatchService:
         )
 
         try:
+            current_location = DispatchService.get_shipment_current_location(shipment)
+            next_hop = DispatchService.get_shipment_next_hop(shipment)
+
+            if current_location is None:
+                raise ValueError('У посилки не визначена поточна локація.')
+
+            if current_location.id != group.origin_id:
+                raise ValueError('Посилка не знаходиться в origin цієї dispatch-групи.')
+
+            if next_hop is None:
+                raise ValueError('Для посилки не визначено наступний крок маршруту.')
+
+            if next_hop.id != group.destination_id:
+                raise ValueError('Наступний крок посилки не збігається з destination цієї dispatch-групи.')
             item.save()
         except DjangoValidationError as exc:
             DispatchService._raise_as_value_error(exc)
@@ -146,6 +186,8 @@ class DispatchService:
         if group.status != DispatchGroupStatus.IN_TRANSIT:
             raise ValueError('Група ще не відправлена або вже прибула.')
 
+        from shipments.services import ShipmentService
+
         group.status = DispatchGroupStatus.ARRIVED
         group.arrived_at = timezone.now()
         group.current_location = group.destination
@@ -155,21 +197,22 @@ class DispatchService:
         except DjangoValidationError as exc:
             DispatchService._raise_as_value_error(exc)
 
-        destination_label = DispatchService._location_label(group.destination)
-
         for item in group.items.select_related('shipment'):
             shipment = item.shipment
+
+            # 1. Просуваємо маршрут посилки:
+            #    active step -> done
+            #    next pending step -> active
+            #    shipment.current_location -> destination
+            ShipmentService.advance_route(
+                shipment=shipment,
+                arrived_location=group.destination,
+                advanced_by=arrived_by,
+            )
+
+            # 2. Оновлюємо бізнес-статус посилки
             shipment.status = ShipmentStatus.ARRIVED_AT_FACILITY
             shipment.save(update_fields=DispatchService._shipment_save_update_fields(shipment))
-
-            create_tracking_event(
-                shipment=shipment,
-                event_type='arrived_at_facility',
-                location=group.destination,
-                created_by=arrived_by,
-                note=f'Dispatch група {group.code} прибула до {destination_label}.',
-                is_public=True,
-            )
 
         return group
 
@@ -187,3 +230,38 @@ class DispatchService:
             DispatchService._raise_as_value_error(exc)
 
         return group
+
+    @staticmethod
+    def get_shipment_next_hop(shipment):
+        if hasattr(shipment, 'get_next_route_step'):
+            step = shipment.get_next_route_step()
+            return getattr(step, 'location', None) if step else None
+    
+        next_step = (
+            shipment.route_steps
+            .filter(status='pending')
+            .order_by('order')
+            .select_related('location')
+            .first()
+        )
+        return next_step.location if next_step else None
+    
+    @staticmethod
+    def get_shipment_current_location(shipment):
+        return getattr(shipment, 'current_location', None)
+    
+    @staticmethod
+    def get_or_create_open_group_for_shipment(shipment, created_by=None):
+        origin = DispatchService.get_shipment_current_location(shipment)
+        destination = DispatchService.get_shipment_next_hop(shipment)
+    
+        if origin is None:
+            raise ValueError('У посилки не визначена поточна локація.')
+        if destination is None:
+            raise ValueError('У посилки не визначений наступний крок маршруту.')
+    
+        return DispatchService.get_or_create_open_group(
+            origin=origin,
+            destination=destination,
+            created_by=created_by,
+        )

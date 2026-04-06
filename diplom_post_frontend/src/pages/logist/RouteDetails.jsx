@@ -11,8 +11,6 @@ import Card from '../../components/ui/Card'
 import {
   useRoute,
   useConfirmRoute,
-  useStartRoute,
-  useCompleteRoute,
   useGenerateDefaultRouteSteps,
 } from '../../hooks/useRoutes'
 import { fDateTime } from '../../utils/formatters'
@@ -24,8 +22,6 @@ export default function RouteDetails() {
   const { data: route, isLoading, isError, refetch } = useRoute(id)
 
   const confirmMutation = useConfirmRoute()
-  const startMutation = useStartRoute()
-  const completeMutation = useCompleteRoute()
   const generateStepsMutation = useGenerateDefaultRouteSteps()
 
   const [confirmType, setConfirmType] = useState(null)
@@ -54,14 +50,6 @@ export default function RouteDetails() {
       await confirmMutation.mutateAsync(route.id)
     }
 
-    if (confirmType === 'start') {
-      await startMutation.mutateAsync(route.id)
-    }
-
-    if (confirmType === 'complete') {
-      await completeMutation.mutateAsync(route.id)
-    }
-
     setConfirmType(null)
     refetch()
   }
@@ -70,7 +58,7 @@ export default function RouteDetails() {
     <>
       <PageHeader
         title={route.group_code ? `Маршрут ${route.group_code}` : `Маршрут #${route.id}`}
-        subtitle="Перегляд деталей та керування маршрутом"
+        subtitle="Перегляд деталей маршруту"
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="text" onClick={() => navigate('/logist/routes')}>
@@ -95,27 +83,12 @@ export default function RouteDetails() {
                 Підтвердити
               </Button>
             )}
-
-            {route.status === 'confirmed' && (
-              <Button color="warning" onClick={() => setConfirmType('start')}>
-                Почати виконання
-              </Button>
-            )}
-
-            {route.status === 'in_progress' && (
-              <Button color="success" onClick={() => setConfirmType('complete')}>
-                Завершити маршрут
-              </Button>
-            )}
           </Stack>
         }
       />
 
       <Stack spacing={3}>
-        {(confirmMutation.isError ||
-          startMutation.isError ||
-          completeMutation.isError ||
-          generateStepsMutation.isError) && (
+        {(confirmMutation.isError || generateStepsMutation.isError) && (
           <Alert severity="error">
             {generateStepsMutation.isError
               ? 'Не вдалося згенерувати кроки маршруту.'
@@ -272,25 +245,9 @@ export default function RouteDetails() {
         onClose={() => setConfirmType(null)}
         onConfirm={handleConfirmAction}
         title="Підтвердження дії"
-        message={
-          confirmType === 'confirm'
-            ? 'Підтвердити цей маршрут?'
-            : confirmType === 'start'
-              ? 'Почати виконання цього маршруту?'
-              : 'Завершити цей маршрут?'
-        }
-        confirmText={
-          confirmType === 'confirm'
-            ? 'Підтвердити'
-            : confirmType === 'start'
-              ? 'Почати'
-              : 'Завершити'
-        }
-        loading={
-          confirmMutation.isPending ||
-          startMutation.isPending ||
-          completeMutation.isPending
-        }
+        message="Підтвердити цей маршрут?"
+        confirmText="Підтвердити"
+        loading={confirmMutation.isPending}
       />
     </>
   )

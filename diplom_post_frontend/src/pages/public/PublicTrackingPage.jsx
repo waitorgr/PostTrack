@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, Box, Stack, Typography } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -16,6 +16,79 @@ import { fDateTime } from '../../utils/formatters'
 async function apiTrackShipment(trackingCode) {
   const response = await client.get(`/shipments/track/${trackingCode}/`)
   return response.data
+}
+
+function buildPublicTrackingEvents(shipment) {
+  const rawEvents = shipment?.tracking_events || shipment?.events || []
+
+  const visibleStatuses = new Set([
+    'accepted',
+    'arrived_at_facility',
+    'available_for_pickup',
+    'delivered',
+  ])
+
+  const normalizeText = (value) =>
+    String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const removeTrailingDot = (value) =>
+    normalizeText(value).replace(/\.\s*$/, '')
+
+  const buildTitleFromNote = (event) => {
+    const status = event.status || event.event_type
+    const note = normalizeText(event.note)
+    const locationName = event.location?.name || event.location_name || ''
+
+    if (status === 'accepted') {
+      if (locationName) {
+        return `Прийнято у відділенні ${locationName}`
+      }
+      return note ? removeTrailingDot(note) : 'Прийнято'
+    }
+
+    if (status === 'arrived_at_facility') {
+      if (note) {
+        return removeTrailingDot(
+          note
+            .replace(/^Посилка прибула до\s+/i, 'Прибуло до ')
+            .replace(/^Відправлення прибула до\s+/i, 'Прибуло до ')
+            .replace(/^Відправлення прибуло до\s+/i, 'Прибуло до ')
+        )
+      }
+      return 'Прибуло до обʼєкта'
+    }
+
+    if (status === 'available_for_pickup') {
+      return 'Очікує отримання'
+    }
+
+    if (status === 'delivered') {
+      return 'Доставлено'
+    }
+
+    return removeTrailingDot(note) || event.event_type_label || 'Подія'
+  }
+
+  return rawEvents
+    .filter((event) => visibleStatuses.has(event.status || event.event_type))
+    .map((event, index) => {
+      const status = event.status || event.event_type
+
+      return {
+        id: event.id || `${status}-${event.created_at || index}`,
+        title: buildTitleFromNote(event),
+        created_at: event.created_at,
+        status,
+        note: event.note || '',
+      }
+    })
+    .sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0
+      return timeA - timeB
+    })
 }
 
 export default function PublicTrackingPage() {
@@ -50,7 +123,10 @@ export default function PublicTrackingPage() {
     navigate(`/track/${normalized}`)
   }
 
-  const trackingEvents = shipment?.tracking_events || shipment?.events || []
+  const publicTrackingEvents = useMemo(
+    () => buildPublicTrackingEvents(shipment),
+    [shipment]
+  )
 
   return (
     <>
@@ -70,7 +146,7 @@ export default function PublicTrackingPage() {
               label="Трек-номер"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Наприклад: 0100100001"
+              placeholder="Наприклад: UA123456789UA"
             />
 
             <Button type="submit" sx={{ minWidth: { md: 180 } }}>
@@ -96,8 +172,13 @@ export default function PublicTrackingPage() {
         </Alert>
       ) : (
         <Stack spacing={3}>
-          <Card>
-            <Stack spacing={2}>
+          <Card
+            sx={{
+              borderRadius: 4,
+              bgcolor: '#f7f7f7',
+            }}
+          >
+            <Stack spacing={1.5}>
               <Box
                 display="flex"
                 justifyContent="space-between"
@@ -106,10 +187,10 @@ export default function PublicTrackingPage() {
                 gap={2}
               >
                 <Box>
-                  <Typography variant="h6" fontWeight={700}>
+                  <Typography variant="h5" fontWeight={800}>
                     {shipment.tracking_number || '—'}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  <Typography variant="body2" color="text.secondary">
                     Створено: {fDateTime(shipment.created_at)}
                   </Typography>
                 </Box>
@@ -117,22 +198,25 @@ export default function PublicTrackingPage() {
                 <StatusBadge status={shipment.status} type="shipment" />
               </Box>
 
-              <Box>
-                <Typography>
-                  <strong>Маршрут:</strong>{' '}
-                  {shipment.origin?.name || shipment.origin_name || '—'} →{' '}
-                  {shipment.destination?.name || shipment.destination_name || '—'}
-                </Typography>
-              </Box>
+              <Typography>
+                <strong>Маршрут:</strong>{' '}
+                {shipment.origin?.name || shipment.origin_name || '—'} →{' '}
+                {shipment.destination?.name || shipment.destination_name || '—'}
+              </Typography>
+
+              <Typography>
+                <strong>Поточне місце:</strong>{' '}
+                {shipment.current_location?.name || shipment.current_location_name || '—'}
+              </Typography>
             </Stack>
           </Card>
 
           <Card>
             <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>
-              Історія руху
+              Трекінг
             </Typography>
 
-            <TrackingTimeline events={trackingEvents} />
+            <TrackingTimeline events={publicTrackingEvents} variant="public" />
           </Card>
         </Stack>
       )}

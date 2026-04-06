@@ -45,6 +45,14 @@ class PaymentType(models.TextChoices):
     CASH_ON_DELIVERY = "cash_on_delivery", "Оплата при отриманні"
 
 
+class ShipmentRouteStepStatus(models.TextChoices):
+    PENDING = "pending", "Очікує"
+    ACTIVE = "active", "Активний"
+    DONE = "done", "Завершений"
+    SKIPPED = "skipped", "Пропущений"
+    CANCELED = "canceled", "Скасований"
+
+
 class Shipment(models.Model):
     tracking_number = models.CharField(
         "Трекінг-номер",
@@ -76,6 +84,14 @@ class Shipment(models.Model):
         on_delete=models.PROTECT,
         related_name="received_shipments",
         verbose_name="Відділення призначення",
+    )
+    current_location = models.ForeignKey(
+        "locations.Location",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="current_shipments",
+        verbose_name="Поточна локація",
     )
 
     weight = models.DecimalField("Вага (кг)", max_digits=7, decimal_places=2)
@@ -143,6 +159,14 @@ class Shipment(models.Model):
         parts = [self.receiver_last_name, self.receiver_first_name, self.receiver_patronymic]
         return " ".join(part for part in parts if part).strip()
 
+    @property
+    def active_route_step(self):
+        return self.route_steps.filter(status=ShipmentRouteStepStatus.ACTIVE).select_related("location").first()
+
+    @property
+    def next_route_step(self):
+        return self.route_steps.filter(status=ShipmentRouteStepStatus.PENDING).select_related("location").order_by("order").first()
+
     @classmethod
     def calculate_price(cls, weight_kg):
         """
@@ -160,25 +184,25 @@ class Shipment(models.Model):
 
     def clean(self):
         super().clean()
-    
+
         from locations.models import Location, LocationType
-    
+
         errors = {}
-    
+
         self.sender_first_name = self._normalize_name_part(self.sender_first_name)
         self.sender_last_name = self._normalize_name_part(self.sender_last_name)
         self.sender_patronymic = self._normalize_name_part(self.sender_patronymic)
         self.receiver_first_name = self._normalize_name_part(self.receiver_first_name)
         self.receiver_last_name = self._normalize_name_part(self.receiver_last_name)
         self.receiver_patronymic = self._normalize_name_part(self.receiver_patronymic)
-    
+
         self.sender_phone = self._normalize_phone(self.sender_phone)
         self.receiver_phone = self._normalize_phone(self.receiver_phone)
-    
+
         self.sender_email = (self.sender_email or "").strip().lower()
         self.receiver_email = (self.receiver_email or "").strip().lower()
         self.description = (self.description or "").strip()
-    
+
         required_name_fields = {
             "sender_first_name": self.sender_first_name,
             "sender_last_name": self.sender_last_name,
@@ -190,46 +214,55 @@ class Shipment(models.Model):
         for field_name, value in required_name_fields.items():
             if not value:
                 errors[field_name] = "Поле не може бути порожнім або складатися лише з пробілів."
-    
+
         self._validate_phone(self.sender_phone, "sender_phone", errors)
         self._validate_phone(self.receiver_phone, "receiver_phone", errors)
-    
+
         origin = None
         destination = None
-    
+        current_location = None
+
         if self.origin_id:
             origin = Location.objects.filter(pk=self.origin_id).only("id", "type").first()
             if not origin:
                 errors["origin"] = "Відділення відправлення не знайдено."
         else:
             errors["origin"] = "Відділення відправлення є обов'язковим."
-    
+
         if self.destination_id:
             destination = Location.objects.filter(pk=self.destination_id).only("id", "type").first()
             if not destination:
                 errors["destination"] = "Відділення призначення не знайдено."
         else:
             errors["destination"] = "Відділення призначення є обов'язковим."
-    
+
+        if self.current_location_id:
+            current_location = Location.objects.filter(pk=self.current_location_id).only("id").first()
+            if not current_location:
+                errors["current_location"] = "Поточну локацію не знайдено."
+
         if origin and destination and origin.id == destination.id:
             errors["destination"] = "Відділення призначення має відрізнятися від відділення відправлення."
-    
+
         if origin and origin.type != LocationType.POST_OFFICE:
             errors["origin"] = "Відділення відправлення має бути поштовим відділенням."
-    
+
         if destination and destination.type != LocationType.POST_OFFICE:
             errors["destination"] = "Відділення призначення має бути поштовим відділенням."
-    
+
+        if current_location and origin and not self.pk and current_location.id != origin.id:
+            errors["current_location"] = "Для нової посилки поточна локація має співпадати з origin."
+
         if self.weight is None:
             errors["weight"] = "Вага є обов'язковою."
         elif self.weight <= 0:
             errors["weight"] = "Вага повинна бути більшою за 0."
-    
+
         if self.price is None:
             errors["price"] = "Ціна є обов'язковою."
         elif self.price < 0:
             errors["price"] = "Ціна не може бути від'ємною."
-    
+
         if errors:
             raise ValidationError(errors)
 
@@ -240,8 +273,72 @@ class Shipment(models.Model):
         if self.weight is not None and not self.price:
             self.price = self.calculate_price(self.weight)
 
+        if self.current_location_id is None and self.origin_id:
+            self.current_location_id = self.origin_id
+
         self.full_clean()
         return super().save(*args, **kwargs)
+
+
+class ShipmentRouteStep(models.Model):
+    shipment = models.ForeignKey(
+        Shipment,
+        on_delete=models.CASCADE,
+        related_name="route_steps",
+        verbose_name="Посилка",
+    )
+    order = models.PositiveIntegerField("Порядок кроку")
+    location = models.ForeignKey(
+        "locations.Location",
+        on_delete=models.PROTECT,
+        related_name="shipment_route_steps",
+        verbose_name="Локація маршруту",
+    )
+    status = models.CharField(
+        "Статус кроку",
+        max_length=20,
+        choices=ShipmentRouteStepStatus.choices,
+        default=ShipmentRouteStepStatus.PENDING,
+    )
+    actual_arrival_at = models.DateTimeField("Фактичне прибуття", null=True, blank=True)
+    actual_departure_at = models.DateTimeField("Фактичне вибуття", null=True, blank=True)
+    created_at = models.DateTimeField("Створено", auto_now_add=True)
+    updated_at = models.DateTimeField("Оновлено", auto_now=True)
+
+    class Meta:
+        verbose_name = "Крок маршруту посилки"
+        verbose_name_plural = "Кроки маршруту посилок"
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["shipment", "order"], name="uniq_shipment_route_step_order"),
+        ]
+
+    def __str__(self):
+        return f"{self.shipment.tracking_number} — крок {self.order} — {self.location}"
+
+    def clean(self):
+        super().clean()
+
+        errors = {}
+
+        if self.order is None:
+            errors["order"] = "Порядок кроку є обов'язковим."
+
+        if self.status == ShipmentRouteStepStatus.ACTIVE and self.actual_arrival_at is None:
+            self.actual_arrival_at = timezone.now()
+
+        if self.status == ShipmentRouteStepStatus.DONE and self.actual_departure_at is None:
+            self.actual_departure_at = timezone.now()
+
+        if (
+            self.actual_arrival_at
+            and self.actual_departure_at
+            and self.actual_departure_at < self.actual_arrival_at
+        ):
+            errors["actual_departure_at"] = "Час вибуття не може бути раніше часу прибуття."
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class Payment(models.Model):

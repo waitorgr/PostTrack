@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Alert, Stack } from '@mui/material'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PageHeader from '../../components/common/PageHeader'
 import FilterPanel from '../../components/common/FilterPanel'
@@ -17,6 +18,7 @@ import { fDateTime } from '../../utils/formatters'
 const PAGE_SIZE = 10
 
 export default function IncomingGroups() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
@@ -41,6 +43,7 @@ export default function IncomingGroups() {
       apiGetDispatchGroups({
         page,
         page_size: PAGE_SIZE,
+        scope: 'incoming',
         ...(search ? { search } : {}),
         ...(status ? { status } : {}),
       }),
@@ -49,8 +52,8 @@ export default function IncomingGroups() {
   const arriveMutation = useMutation({
     mutationFn: apiArriveDispatch,
     onSuccess: async () => {
-      setMessage('Прибуття групи підтверджено')
-      await queryClient.invalidateQueries({ queryKey: ['warehouse', 'incoming-groups'] })
+      setMessage('Прибуття групи підтверджено. Посилки тепер доступні для ручного сортування.')
+      await queryClient.invalidateQueries({ queryKey: ['warehouse'] })
       await queryClient.invalidateQueries({ queryKey: ['dispatch-groups'] })
       refetch()
     },
@@ -89,9 +92,9 @@ export default function IncomingGroups() {
       render: (row) => row.destination?.name || row.destination_name || '—',
     },
     {
-      key: 'shipments_count',
+      key: 'shipment_count',
       label: 'Посилок',
-      render: (row) => row.shipments_count || row.shipments?.length || 0,
+      render: (row) => row.shipment_count || row.shipments?.length || 0,
     },
     {
       key: 'created_at',
@@ -115,7 +118,16 @@ export default function IncomingGroups() {
             Підтвердити прибуття
           </Button>
         ) : (
-          '—'
+          <Button
+            size="small"
+            variant="text"
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(`/warehouse/dispatch/${row.id}`)
+            }}
+          >
+            Переглянути
+          </Button>
         ),
     },
   ]
@@ -124,7 +136,7 @@ export default function IncomingGroups() {
     <>
       <PageHeader
         title="Вхідні групи"
-        subtitle="Приймання dispatch-груп на вузлі"
+        subtitle="Приймання dispatch-груп, що прибувають на поточний вузол"
       />
 
       {message && (
@@ -167,6 +179,7 @@ export default function IncomingGroups() {
             columns={columns}
             rows={rows}
             loading={isLoading}
+            onRowClick={(row) => navigate(`/warehouse/dispatch/${row.id}`)}
             emptyTitle="Вхідних груп не знайдено"
             emptyDescription="Спробуй змінити фільтри або пошуковий запит."
           />

@@ -5,7 +5,8 @@ import { useCallback } from 'react'
 export const ROLE_HOME_ROUTES = {
   customer: '/customer/dashboard',
   postal_worker: '/postal/dashboard',
-  warehouse_worker: '/warehouse/dashboard',
+  sorting_center_worker: '/warehouse/dashboard',
+  distribution_center_worker: '/warehouse/dashboard',
   logist: '/logist/dashboard',
   driver: '/driver/dashboard',
   hr: '/hr/dashboard',

@@ -47,6 +47,7 @@ class IsPostalOrDistributionCenterWorker(BaseRolePermission):
     allowed_roles = (
         Role.POSTAL_WORKER,
         Role.DISTRIBUTION_CENTER_WORKER,
+        Role.SORTING_CENTER_WORKER,
         Role.ADMIN,
     )
 

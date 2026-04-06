@@ -7,7 +7,7 @@ import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ErrorState from '../../components/common/ErrorState'
 import DataTable from '../../components/domain/DataTable'
 import { useUsers } from '../../hooks/useUsers'
-import { ROLE_LABELS } from '../../utils/constants'
+import { ROLE_LABELS, WAREHOUSE_ROLES } from '../../utils/constants'
 
 export default function HRDashboard() {
   const navigate = useNavigate()
@@ -16,7 +16,7 @@ export default function HRDashboard() {
   const users = data?.results || data || []
 
   const postalWorkers = users.filter((u) => u.role === 'postal_worker').length
-  const warehouseWorkers = users.filter((u) => u.role === 'warehouse_worker').length
+  const warehouseWorkers = users.filter((u) => WAREHOUSE_ROLES.includes(u.role)).length
   const drivers = users.filter((u) => u.role === 'driver').length
   const logists = users.filter((u) => u.role === 'logist').length
 
@@ -71,7 +71,7 @@ export default function HRDashboard() {
       >
         <StatCard title="Усього працівників" value={users.length} />
         <StatCard title="Працівники відділень" value={postalWorkers} />
-        <StatCard title="Склад / сортування" value={warehouseWorkers} />
+        <StatCard title="СЦ / РЦ" value={warehouseWorkers} />
         <StatCard title="Водії + логісти" value={drivers + logists} />
       </Box>
 

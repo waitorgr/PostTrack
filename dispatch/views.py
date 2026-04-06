@@ -104,6 +104,49 @@ class DispatchGroupViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             return DispatchGroupDetailSerializer
         return DispatchGroupListSerializer
+    
+    @action(detail=False, methods=['post'])
+    def add_shipment_auto(self, request):
+        serializer = AddShipmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        shipment = serializer.validated_data['shipment']
+    
+        try:
+            group, _ = DispatchService.get_or_create_open_group_for_shipment(
+                shipment=shipment,
+                created_by=request.user,
+            )
+            DispatchService.add_shipment(
+                group=group,
+                shipment=shipment,
+                added_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
+    
+        return self._detail_response(group, status_code=status.HTTP_201_CREATED)
+    
+    @action(detail=False, methods=['post'])
+    def create_with_shipment(self, request):
+        serializer = AddShipmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        shipment = serializer.validated_data['shipment']
+    
+        try:
+            group, _ = DispatchService.get_or_create_open_group_for_shipment(
+                shipment=shipment,
+                created_by=request.user,
+            )
+    
+            DispatchService.add_shipment(
+                group=group,
+                shipment=shipment,
+                added_by=request.user,
+            )
+        except ValueError as exc:
+            return self._service_error_response(exc)
+    
+        return self._detail_response(group, status_code=status.HTTP_201_CREATED)
 
     def get_queryset(self):
         user = self.request.user
@@ -125,11 +168,23 @@ class DispatchGroupViewSet(viewsets.ModelViewSet):
 
         # Логіст / адмін бачать overview по всіх групах
         if not (_is_logist(user) or _is_admin_like(user)):
-            if not getattr(user, 'location', None):
+            location = getattr(user, 'location', None)
+            if not location:
                 return qs.none()
 
-            # Для поточного функціоналу залишаємо стару поведінку
-            qs = qs.filter(origin=user.location)
+            scope = (self.request.query_params.get('scope') or '').strip().lower()
+            role = _normalize_role(getattr(user, 'role', None))
+
+            if scope == 'incoming':
+                qs = qs.filter(destination=location)
+            elif scope == 'outgoing':
+                qs = qs.filter(origin=location)
+            elif scope == 'current':
+                qs = qs.filter(current_location=location)
+            elif role == 'postal_worker':
+                qs = qs.filter(origin=location)
+            else:
+                qs = qs.filter(current_location=location)
 
         status_filter = self.request.query_params.get('status')
         if status_filter:
@@ -276,3 +331,5 @@ class DispatchGroupViewSet(viewsets.ModelViewSet):
             return self._service_error_response(exc)
 
         return self._detail_response(group)
+    
+    

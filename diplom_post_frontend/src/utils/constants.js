@@ -13,7 +13,8 @@ export const LOCAL_STORAGE_KEYS = {
 export const ROLE_LABELS = {
   customer: 'Клієнт',
   postal_worker: 'Працівник відділення',
-  warehouse_worker: 'Працівник складу',
+  sorting_center_worker: 'Працівник сортувального центру',
+  distribution_center_worker: 'Працівник розподільчого центру',
   logist: 'Логіст',
   driver: 'Водій',
   hr: 'HR',
@@ -22,10 +23,16 @@ export const ROLE_LABELS = {
 
 export const WORKER_ROLES = [
   'postal_worker',
-  'warehouse_worker',
+  'sorting_center_worker',
+  'distribution_center_worker',
   'driver',
   'logist',
   'hr',
+]
+
+export const WAREHOUSE_ROLES = [
+  'sorting_center_worker',
+  'distribution_center_worker',
 ]
 
 export const PUBLIC_ROUTES = [

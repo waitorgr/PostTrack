@@ -110,60 +110,8 @@ class DispatchGroup(models.Model):
     def is_active(self):
         return self.status != DispatchGroupStatus.COMPLETED
 
-    def get_destination_location(self):
-        """
-        Автоматично визначає наступну локацію за ієрархією.
-    
-        POST_OFFICE -> distribution center
-        DISTRIBUTION_CENTER -> sorting center
-        Для інших типів повертає None.
-        """
-        if not self.origin:
-            return None
-    
-        origin_type = getattr(self.origin, 'type', None)
-    
-        distribution_center_value = 'distribution_center'
-        post_office_value = 'post_office'
-    
-        try:
-            from locations.models import LocationType
-            distribution_center_value = getattr(LocationType, 'DISTRIBUTION_CENTER', distribution_center_value)
-            post_office_value = getattr(LocationType, 'POST_OFFICE', post_office_value)
-        except Exception:
-            pass
-        
-        if origin_type == post_office_value:
-            if hasattr(self.origin, 'get_distribution_center'):
-                dc = self.origin.get_distribution_center()
-                if dc is not None:
-                    return dc
-    
-            for attr in ('parent_dc', 'distribution_center', 'dc'):
-                value = getattr(self.origin, attr, None)
-                if value is not None:
-                    return value
-    
-        if origin_type == distribution_center_value:
-            if hasattr(self.origin, 'get_sorting_center'):
-                sc = self.origin.get_sorting_center()
-                if sc is not None:
-                    return sc
-    
-            for attr in ('parent_sc', 'sorting_center', 'sc'):
-                value = getattr(self.origin, attr, None)
-                if value is not None:
-                    return value
-    
-        return None
-
     def clean(self):
         errors = {}
-
-        expected_destination = self.get_destination_location() if self.origin_id else None
-
-        if not self.destination_id and expected_destination is not None:
-            self.destination = expected_destination
 
         if not self.origin_id:
             errors['origin'] = 'Потрібно вказати локацію відправлення.'
@@ -173,11 +121,6 @@ class DispatchGroup(models.Model):
 
         if self.origin_id and self.destination_id and self.origin_id == self.destination_id:
             errors['destination'] = 'Локація призначення не може збігатися з локацією відправлення.'
-
-        if expected_destination is not None and self.destination_id and self.destination_id != expected_destination.id:
-            errors['destination'] = (
-                f'Для локації "{self.origin}" наступною ланкою має бути "{expected_destination}".'
-            )
 
         if self.driver_id:
             try:
@@ -252,11 +195,6 @@ class DispatchGroup(models.Model):
         if not self.code:
             self.code = generate_group_code()
 
-        if not self.destination_id:
-            inferred_destination = self.get_destination_location()
-            if inferred_destination is not None:
-                self.destination = inferred_destination
-
         if not self.current_location_id and self.status in {DispatchGroupStatus.FORMING, DispatchGroupStatus.READY}:
             self.current_location = self.origin
 
@@ -278,7 +216,6 @@ class DispatchGroupItem(models.Model):
         DispatchGroupStatus.FORMING,
         DispatchGroupStatus.READY,
         DispatchGroupStatus.IN_TRANSIT,
-        DispatchGroupStatus.ARRIVED,
     )
 
     group = models.ForeignKey(
@@ -319,6 +256,19 @@ class DispatchGroupItem(models.Model):
         group_label = getattr(self.group, 'code', self.group_id)
         return f'{group_label} → {shipment_label}'
 
+    def _get_shipment_next_hop(self):
+        if hasattr(self.shipment, 'get_next_hop'):
+            return self.shipment.get_next_hop()
+
+        next_step = (
+            self.shipment.route_steps
+            .filter(status='pending')
+            .select_related('location')
+            .order_by('order')
+            .first()
+        )
+        return next_step.location if next_step else None
+
     def clean(self):
         errors = {}
 
@@ -350,6 +300,27 @@ class DispatchGroupItem(models.Model):
         shipment_status = getattr(self.shipment, 'status', None)
         if shipment_status in {'cancelled', 'canceled'}:
             errors['shipment'] = 'Скасовану посилку не можна додавати до dispatch-групи.'
+
+        shipment_current_location = getattr(self.shipment, 'current_location', None)
+        shipment_next_hop = self._get_shipment_next_hop()
+
+        if shipment_current_location is None:
+            errors['shipment'] = 'У посилки не визначена поточна локація.'
+
+        if shipment_next_hop is None:
+            errors['shipment'] = 'У посилки не визначено наступний крок маршруту.'
+
+        if self.group_id and shipment_current_location is not None:
+            if shipment_current_location.id != self.group.origin_id:
+                errors['shipment'] = (
+                    'Посилка не знаходиться в локації відправлення цієї dispatch-групи.'
+                )
+
+        if self.group_id and shipment_next_hop is not None:
+            if shipment_next_hop.id != self.group.destination_id:
+                errors['shipment'] = (
+                    'Наступний крок маршруту посилки не збігається з destination dispatch-групи.'
+                )
 
         if errors:
             raise ValidationError(errors)

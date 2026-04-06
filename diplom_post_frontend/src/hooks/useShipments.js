@@ -7,6 +7,7 @@ import {
   apiConfirmDelivery,
   apiConfirmPayment,
   apiUpdateShipmentStatus,
+  apiManualSortShipment,
 } from '../api/shipments'
 
 export const shipmentKeys = {
@@ -85,6 +86,20 @@ export const useUpdateShipmentStatus = () => {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: shipmentKeys.all })
       queryClient.invalidateQueries({ queryKey: shipmentKeys.detail(variables.id) })
+    },
+  })
+}
+
+export const useManualSortShipment = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: apiManualSortShipment,
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: shipmentKeys.all })
+      queryClient.invalidateQueries({ queryKey: shipmentKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: ['warehouse'] })
+      queryClient.invalidateQueries({ queryKey: ['dispatch-groups'] })
     },
   })
 }

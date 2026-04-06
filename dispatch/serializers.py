@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import DispatchGroup, DispatchGroupItem, DispatchGroupStatus
 from shipments.models import Shipment
 from shipments.serializers import ShipmentListSerializer
+from locations.models import Location
 
 
 def get_object_display(obj, *attrs):
@@ -140,7 +141,9 @@ class DispatchGroupDetailSerializer(DispatchGroupBaseSerializer):
 
 
 class DispatchGroupCreateSerializer(DispatchGroupBaseSerializer):
-    destination = serializers.PrimaryKeyRelatedField(read_only=True)
+    destination = serializers.PrimaryKeyRelatedField(
+        queryset=Location.objects.filter(is_active=True)
+    )
 
     class Meta:
         model = DispatchGroup
@@ -207,25 +210,21 @@ class DispatchGroupCreateSerializer(DispatchGroupBaseSerializer):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
         origin = getattr(user, 'location', None)
+        destination = attrs.get('destination')
 
         if origin is None:
             raise serializers.ValidationError({
                 'origin': 'У користувача немає прив’язаної локації.'
             })
 
-        destination = None
-        if hasattr(origin, 'get_distribution_center'):
-            destination = origin.get_distribution_center()
-
-        if destination is None and hasattr(origin, 'get_sorting_center'):
-            destination = origin.get_sorting_center()
-
-        if destination is None:
-            destination = getattr(origin, 'parent_dc', None) or getattr(origin, 'parent_sc', None)
-
         if destination is None:
             raise serializers.ValidationError({
-                'destination': 'Не вдалося автоматично визначити destination для поточної локації.'
+                'destination': 'Потрібно вказати destination.'
+            })
+
+        if origin.id == destination.id:
+            raise serializers.ValidationError({
+                'destination': 'Destination не може збігатися з origin.'
             })
 
         candidate = DispatchGroup(
@@ -244,48 +243,36 @@ class DispatchGroupCreateSerializer(DispatchGroupBaseSerializer):
                 raise serializers.ValidationError(exc.message_dict)
             raise serializers.ValidationError({'non_field_errors': exc.messages})
 
-        attrs['destination'] = destination
         return attrs
 
     def create(self, validated_data):
         request = self.context.get('request')
         user = request.user
         origin = user.location
+        destination = validated_data.pop('destination')
 
-        destination = validated_data.pop('destination', None)
-        if destination is None:
-            if hasattr(origin, 'get_distribution_center'):
-                destination = origin.get_distribution_center()
-
-            if destination is None and hasattr(origin, 'get_sorting_center'):
-                destination = origin.get_sorting_center()
-
-            if destination is None:
-                destination = getattr(origin, 'parent_dc', None) or getattr(origin, 'parent_sc', None)
-
-        return DispatchGroup.objects.create(
+        group = DispatchGroup.objects.create(
             origin=origin,
             destination=destination,
             current_location=origin,
             created_by=user,
             **validated_data,
         )
+        return group
 
 
 class AddShipmentSerializer(serializers.Serializer):
     tracking_number = serializers.CharField()
-    shipment = serializers.PrimaryKeyRelatedField(read_only=True)
 
     def validate(self, attrs):
-        tracking_number = attrs.get('tracking_number', '').strip()
+        tracking_number = attrs.get('tracking_number')
 
         try:
             shipment = Shipment.objects.get(tracking_number=tracking_number)
         except Shipment.DoesNotExist:
             raise serializers.ValidationError({
-                'tracking_number': 'Посилку з таким номером не знайдено.'
+                'tracking_number': 'Посилку не знайдено'
             })
 
-        attrs['tracking_number'] = tracking_number
         attrs['shipment'] = shipment
         return attrs
