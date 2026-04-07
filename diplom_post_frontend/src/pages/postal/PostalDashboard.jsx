@@ -1,4 +1,5 @@
 import { Box, Typography } from '@mui/material'
+import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import PageHeader from '../../components/common/PageHeader'
@@ -8,6 +9,7 @@ import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ErrorState from '../../components/common/ErrorState'
 import ShipmentTable from '../../components/domain/ShipmentTable'
 import { useShipments } from '../../hooks/useShipments'
+import { apiDownloadLocationReport } from '../../api/reports'
 
 export default function PostalDashboard() {
   const navigate = useNavigate()
@@ -22,6 +24,10 @@ export default function PostalDashboard() {
   const createdToday = shipments.filter(
     (s) => s.created_at && dayjs(s.created_at).format('YYYY-MM-DD') === today
   ).length
+
+  const locationReportMutation = useMutation({
+    mutationFn: apiDownloadLocationReport,
+  })
 
   const readyForPickup = shipments.filter((s) => s.status === 'available_for_pickup').length
   const inProcessing = shipments.filter((s) =>
@@ -38,9 +44,14 @@ export default function PostalDashboard() {
         title="Робоче місце відділення"
         subtitle="Оперативний огляд відділення"
         actions={
-          <Button onClick={() => navigate('/postal/shipments/create')}>
-            Створити посилку
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="outlined" onClick={() => locationReportMutation.mutate({})} disabled={locationReportMutation.isPending}>
+              Звіт по локації
+            </Button>
+            <Button onClick={() => navigate('/postal/shipments/create')}>
+              Створити посилку
+            </Button>
+          </Box>
         }
       />
 

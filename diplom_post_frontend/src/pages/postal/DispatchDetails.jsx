@@ -21,6 +21,10 @@ import {
   apiRemoveShipmentFromDispatch,
 } from '../../api/dispatch'
 import { fDateTime } from '../../utils/formatters'
+import {
+  apiDownloadDispatchArriveReport,
+  apiDownloadDispatchDepartReport,
+} from '../../api/reports'
 
 export default function DispatchDetails() {
   const { id } = useParams()
@@ -30,6 +34,24 @@ export default function DispatchDetails() {
   const [trackingNumber, setTrackingNumber] = useState('')
   const [confirmType, setConfirmType] = useState(null)
   const [message, setMessage] = useState('')
+
+  const downloadReportMutation = useMutation({
+    mutationFn: async ({ type, dispatchId }) => {
+      if (type === 'depart') return apiDownloadDispatchDepartReport(dispatchId)
+      if (type === 'arrive') return apiDownloadDispatchArriveReport(dispatchId)
+      throw new Error('Невідомий тип звіту')
+    },
+    onSuccess: (_, variables) => {
+      const label = variables.type === 'depart' ? 'Акт відправлення' : 'Акт прибуття'
+      setMessage(`${label} завантажено.`)
+    },
+    onError: (error) => {
+      setMessage(
+        error.response?.data?.detail ||
+          'Не вдалося згенерувати або завантажити PDF-звіт.'
+      )
+    },
+  })
 
   const { data: dispatchGroup, isLoading, isError, refetch } = useQuery({
     queryKey: ['dispatch-group', id],
@@ -189,6 +211,26 @@ export default function DispatchDetails() {
         subtitle="Деталі dispatch-групи та керування її складом"
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
+            {['in_transit', 'arrived', 'completed'].includes(dispatchGroup.status) && (
+              <Button
+                variant="outlined"
+                onClick={() => downloadReportMutation.mutate({ type: 'depart', dispatchId: dispatchGroup.id })}
+                disabled={downloadReportMutation.isPending}
+              >
+                Акт відправлення
+              </Button>
+            )}
+
+            {['arrived', 'completed'].includes(dispatchGroup.status) && (
+              <Button
+                variant="outlined"
+                onClick={() => downloadReportMutation.mutate({ type: 'arrive', dispatchId: dispatchGroup.id })}
+                disabled={downloadReportMutation.isPending}
+              >
+                Акт прибуття
+              </Button>
+            )}
+
             {dispatchGroup.status === 'forming' && (
               <>
                 <Button color="warning" onClick={() => setConfirmType('ready')}>

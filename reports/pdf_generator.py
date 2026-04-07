@@ -20,6 +20,7 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.utils import ImageReader
 
 # Кольори
 NAVY = colors.HexColor("#1A3C6E")
@@ -199,6 +200,36 @@ def _build_pdf(elements, title, subtitle=""):
 
 
 # ─────────────────────────────────────────────
+# Допоміжний рендер штрихкоду без накладання тексту на смуги
+# ─────────────────────────────────────────────
+def _build_barcode_image(tracking_number, max_width, max_height):
+    import barcode as bc
+    from barcode.writer import ImageWriter
+    from reportlab.platypus import Image as RLImage
+
+    bar_buf = io.BytesIO()
+    code = bc.get("code128", tracking_number, writer=ImageWriter())
+    code.write(
+        bar_buf,
+        options={
+            "module_width": 0.22,
+            "module_height": 16,
+            "quiet_zone": 2.5,
+            "write_text": False,
+        },
+    )
+    bar_buf.seek(0)
+
+    image_reader = ImageReader(bar_buf)
+    img_width, img_height = image_reader.getSize()
+    scale = min(max_width / img_width, max_height / img_height)
+
+    barcode_img = RLImage(bar_buf, width=img_width * scale, height=img_height * scale)
+    barcode_img.hAlign = "LEFT"
+    return barcode_img
+
+
+# ─────────────────────────────────────────────
 # 1. Звіт прийому посилки (створення)
 # ─────────────────────────────────────────────
 def generate_shipment_receipt(shipment):
@@ -207,16 +238,7 @@ def generate_shipment_receipt(shipment):
 
     # Трекінг і штрих-код
     try:
-        import barcode as bc
-        from barcode.writer import ImageWriter
-        from reportlab.platypus import Image as RLImage
-
-        bar_buf = io.BytesIO()
-        code = bc.get("code128", shipment.tracking_number, writer=ImageWriter())
-        code.write(bar_buf)
-        bar_buf.seek(0)
-
-        elements.append(RLImage(bar_buf, width=7 * cm, height=2 * cm))
+        elements.append(_build_barcode_image(shipment.tracking_number, max_width=7 * cm, max_height=1.8 * cm))
         elements.append(Spacer(1, 4))
     except Exception:
         pass

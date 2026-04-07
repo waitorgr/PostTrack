@@ -1,5 +1,6 @@
 import {
   FormControl,
+  FormHelperText,
   InputLabel,
   MenuItem,
   Select as MuiSelect,
@@ -12,10 +13,13 @@ export default function Select({
   options = [],
   fullWidth = true,
   size = 'medium',
+  helperText = '',
+  error = false,
+  required = false,
   ...props
 }) {
   return (
-    <FormControl fullWidth={fullWidth} size={size}>
+    <FormControl fullWidth={fullWidth} size={size} error={error} required={required}>
       {label && <InputLabel>{label}</InputLabel>}
       <MuiSelect label={label} value={value} onChange={onChange} {...props}>
         {options.map((option) => (
@@ -24,6 +28,7 @@ export default function Select({
           </MenuItem>
         ))}
       </MuiSelect>
+      {helperText ? <FormHelperText>{helperText}</FormHelperText> : null}
     </FormControl>
   )
 }

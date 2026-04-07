@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { Alert, Box, Chip, Divider, Stack, Typography } from '@mui/material'
 import { useNavigate, useParams } from 'react-router-dom'
 import PageHeader from '../../components/common/PageHeader'
@@ -17,6 +18,12 @@ import {
   useUpdateShipmentStatus,
 } from '../../hooks/useShipments'
 import { fDateTime } from '../../utils/formatters'
+import {
+  apiDownloadShipmentBarcode,
+  apiDownloadShipmentDeliveryReport,
+  apiDownloadShipmentPaymentReport,
+  apiDownloadShipmentReceipt,
+} from '../../api/reports'
 
 export default function ShipmentDetails() {
   const { id } = useParams()
@@ -30,6 +37,32 @@ export default function ShipmentDetails() {
   const cancelMutation = useCancelShipment()
 
   const [confirmType, setConfirmType] = useState(null)
+  const [reportMessage, setReportMessage] = useState('')
+
+  const downloadReportMutation = useMutation({
+    mutationFn: async ({ type, shipmentId }) => {
+      if (type === 'receipt') return apiDownloadShipmentReceipt(shipmentId)
+      if (type === 'barcode') return apiDownloadShipmentBarcode(shipmentId)
+      if (type === 'payment') return apiDownloadShipmentPaymentReport(shipmentId)
+      if (type === 'delivery') return apiDownloadShipmentDeliveryReport(shipmentId)
+      throw new Error('Невідомий тип звіту')
+    },
+    onSuccess: (_, variables) => {
+      const labels = {
+        receipt: 'Квитанцію',
+        barcode: 'Штрихкод',
+        payment: 'Звіт про оплату',
+        delivery: 'Акт видачі',
+      }
+      setReportMessage(`${labels[variables.type]} завантажено.`)
+    },
+    onError: (error) => {
+      setReportMessage(
+        error.response?.data?.detail ||
+          'Не вдалося згенерувати або завантажити PDF-звіт.'
+      )
+    },
+  })
 
   if (isLoading) return <LoadingSpinner />
   if (isError || !shipment) return <ErrorState onRetry={refetch} />
@@ -63,6 +96,7 @@ export default function ShipmentDetails() {
   const handleConfirmAction = async () => {
     if (confirmType === 'payment') {
       await confirmPaymentMutation.mutateAsync(shipment.id)
+      await handleDownloadReport('payment')
     }
 
     if (confirmType === 'arrival') {
@@ -75,6 +109,7 @@ export default function ShipmentDetails() {
 
     if (confirmType === 'delivery') {
       await confirmDeliveryMutation.mutateAsync(shipment.id)
+      await handleDownloadReport('delivery')
     }
 
     if (confirmType === 'cancel') {
@@ -86,6 +121,14 @@ export default function ShipmentDetails() {
   }
 
   const trackingEvents = shipment.tracking_events || shipment.events || []
+
+  const handleDownloadReport = async (type) => {
+    setReportMessage('')
+    await downloadReportMutation.mutateAsync({
+      type,
+      shipmentId: shipment.id,
+    })
+  }
 
   const senderFullName = [
     shipment.sender_last_name,
@@ -109,6 +152,24 @@ export default function ShipmentDetails() {
             <Button variant="text" onClick={() => navigate('/postal/shipments')}>
               Назад до списку
             </Button>
+
+            <Button variant="outlined" onClick={() => handleDownloadReport('receipt')} disabled={downloadReportMutation.isPending}>
+              Квитанція PDF
+            </Button>
+
+            <Button variant="outlined" onClick={() => handleDownloadReport('barcode')} disabled={downloadReportMutation.isPending}>
+              Штрихкод PDF
+            </Button>
+
+            <Button variant="outlined" onClick={() => handleDownloadReport('payment')} disabled={downloadReportMutation.isPending}>
+              Звіт про оплату
+            </Button>
+
+            {shipment.status === 'delivered' && (
+              <Button variant="outlined" onClick={() => handleDownloadReport('delivery')} disabled={downloadReportMutation.isPending}>
+                Акт видачі PDF
+              </Button>
+            )}
 
             {canConfirmPayment && (
               <Button color="warning" onClick={() => setConfirmType('payment')}>
@@ -138,6 +199,10 @@ export default function ShipmentDetails() {
       />
 
       <Stack spacing={3}>
+        {reportMessage && (
+          <Alert severity={downloadReportMutation.isError ? 'error' : 'info'}>{reportMessage}</Alert>
+        )}
+
         {(confirmPaymentMutation.isError ||
           markArrivalMutation.isError ||
           confirmDeliveryMutation.isError ||

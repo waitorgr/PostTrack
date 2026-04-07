@@ -1,15 +1,22 @@
 import { Box, Typography } from '@mui/material'
+import { useMutation } from '@tanstack/react-query'
 import PageHeader from '../../components/common/PageHeader'
 import StatCard from '../../components/common/StatCard'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ErrorState from '../../components/common/ErrorState'
 import ShipmentTable from '../../components/domain/ShipmentTable'
 import { useShipments } from '../../hooks/useShipments'
+import Button from '../../components/ui/Button'
+import { apiDownloadLocationReport } from '../../api/reports'
 
 export default function WarehouseDashboard() {
   const { data, isLoading, isError, refetch } = useShipments({ page_size: 8 })
 
   const shipments = data?.results || data || []
+
+  const locationReportMutation = useMutation({
+    mutationFn: apiDownloadLocationReport,
+  })
 
   const arrived = shipments.filter((s) => s.status === 'arrived_at_facility').length
   const sorted = shipments.filter((s) => s.status === 'sorted').length
@@ -24,6 +31,11 @@ export default function WarehouseDashboard() {
       <PageHeader
         title="Склад / сортування"
         subtitle="Огляд поточного стану вузла"
+        actions={
+          <Button variant="outlined" onClick={() => locationReportMutation.mutate({})} disabled={locationReportMutation.isPending}>
+            Звіт по локації
+          </Button>
+        }
       />
 
       <Box

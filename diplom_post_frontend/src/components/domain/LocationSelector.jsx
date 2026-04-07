@@ -8,6 +8,10 @@ export default function LocationSelector({
   label = 'Локація',
   params = {},
   disabled = false,
+  error = false,
+  helperText = '',
+  required = false,
+  onBlur,
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ['locations', params],
@@ -35,6 +39,10 @@ export default function LocationSelector({
           {...paramsInput}
           fullWidth
           label={label}
+          required={required}
+          error={error}
+          helperText={helperText}
+          onBlur={onBlur}
           placeholder="Оберіть локацію"
           InputProps={{
             ...paramsInput.InputProps,
